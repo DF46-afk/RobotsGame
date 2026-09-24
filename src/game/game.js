@@ -79,6 +79,10 @@ class Game {
       return;
     }
     logLine('webgl2 ok · renderer "' + (renderer.current.gl.getParameter(renderer.current.gl.RENDERER) || '?') + '"');
+    // the frame loop must run from the very first moment so the loading bar /
+    // overlay transitions keep animating while assets stream in
+    this.last = performance.now();
+    requestAnimationFrame((t) => this.frame(t));
     this.boxPrim = makeBoxPrim(renderer.current.gl, [0.4, 0.6, 0.8]);
     this.boltPrim = makeBoltPrim(renderer.current.gl);
     this.droneAsset = makeDroneAsset(renderer.current.gl);
