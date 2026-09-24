@@ -5,10 +5,13 @@
 'use strict';
 
 import { CONFIG } from '../core/config.js';
-import { MAT4_ID, V3, mat4, vec3 } from '../core/math.js';
-import { clamp, damp, lerp, rnd } from '../core/util.js';
-import { buildRig } from '../anim/procedural.js';
+import { MAT4_ID, V3, mat4, quat, vec3 } from '../core/math.js';
+import { clamp, damp, easeInOutCubic, lerp, rnd } from '../core/util.js';
+import { HeightMap, Spring, buildRig } from '../anim/procedural.js';
 import { renderer } from '../game/state.js';
+
+/* Scratch pool for per-frame math (no allocations in the hot loop). */
+const _s = { m1: MAT4_ID(), m2: MAT4_ID(), v1: V3(), v2: V3(), v3: V3(), q1: quat.set([0, 0, 0, 1], 0, 0, 0, 1) };
 
 class SkinnedMech {
   /** @param {Object} asset parsed GLB asset with skins[]
@@ -23,8 +26,16 @@ class SkinnedMech {
     this.tint = opts.tint || [1, 1, 1];
     this.accent = opts.accent || [0.25, 0.9, 1];
     this.pos = V3(0, 0, 0);          // feet position, metres
-    this.yaw = 0;
     this.vel = V3(0, 0, 0);
+    this.def = opts.def || null;     // gameplay definition (spdMul / dmgMul)
+    /* --- locomotion / combat state (driven by update(dt, ctl, hm)) ------ */
+    this.targetYaw = 0;
+    this.airborne = false;
+    this.onGround = true;
+    this.coyote = 0;
+    this.stepEvents = [];            // consumed by game (footfall audio)
+    this.recoilP = new Spring(CONFIG.mech.recoil.springK, CONFIG.mech.recoil.damping);
+    this.bodyKick = new Spring(48, 9);
     this.phase = rnd(Math.PI * 2);
     this.animT = 0;
     this.hitFlash = 0;

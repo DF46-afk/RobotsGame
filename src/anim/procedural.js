@@ -561,4 +561,4 @@ function makeBoltPrim(gl) {
 }
 
 
-export { HeightMap, buildRig, makeBoltPrim, makeBoxPrim };
+export { HeightMap, Spring, buildRig, makeBoltPrim, makeBoxPrim };
