@@ -375,6 +375,16 @@ const vec3 = {
     o[0] = a[0] + (b[0] - a[0]) * t; o[1] = a[1] + (b[1] - a[1]) * t; o[2] = a[2] + (b[2] - a[2]) * t; return o;
   },
   dist(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]); },
+  /** Closest point on segment ab to p; writes it into o and returns the
+   *  normalised direction (p - closest) so callers can push bodies apart. */
+  closestOnSeg(o, p, a, b) {
+    const abx = b[0] - a[0], aby = b[1] - a[1], abz = b[2] - a[2];
+    const l2 = abx * abx + aby * aby + abz * abz;
+    let t = l2 > 1e-9 ? ((p[0] - a[0]) * abx + (p[1] - a[1]) * aby + (p[2] - a[2]) * abz) / l2 : 0;
+    t = clamp(t, 0, 1);
+    o[0] = a[0] + abx * t; o[1] = a[1] + aby * t; o[2] = a[2] + abz * t;
+    return vec3.norm(_s.v5, vec3.sub(_s.v4, p, o));
+  },
   dist2(a, b) { const x = a[0] - b[0], y = a[1] - b[1], z = a[2] - b[2]; return x * x + y * y + z * z; },
   transform(o, m, v) { // mat4 * vec3 (point)
     const x = v[0], y = v[1], z = v[2];
@@ -521,15 +531,20 @@ const mat4 = {
     o[12]=a[12]; o[13]=a[13]; o[14]=a[14]; o[15]=a[15];
     return o;
   },
+  /* Post-multiply helpers: o = a * Rx(r). Written against temporaries FIRST
+     so in-place use (o === a) is safe — no row/col aliasing bugs. */
   rotX(o, a, r) { const c=Math.cos(r), s=Math.sin(r);
-    for (let i=0;i<4;i++){const t=a[i+4]; o[i+4]=t*c-a[i+8]*s; o[i+8]=t*s+a[i+8]*c;}
-    if(o!==a)for(let i of [0,1,2,3,12,13,14,15])o[i]=a[i]; return o; },
+    for (let j=0;j<4;j++){const y=a[4+j], z=a[8+j];
+      o[j]=a[j]; o[4+j]=y*c+z*s; o[8+j]=z*c-y*s; o[12+j]=a[12+j];}
+    return o; },
   rotY(o, a, r) { const c=Math.cos(r), s=Math.sin(r);
-    for (let i=0;i<4;i++){const t=a[i]; o[i]=a[i+8]*s+t*c; o[i+8]=a[i+8]*c-t*s;}
-    if(o!==a)for(let i of [4,5,6,7,12,13,14,15])o[i]=a[i]; return o; },
+    for (let j=0;j<4;j++){const x=a[j], z=a[8+j];
+      o[j]=x*c-z*s; o[4+j]=a[4+j]; o[8+j]=x*s+z*c; o[12+j]=a[12+j];}
+    return o; },
   rotZ(o, a, r) { const c=Math.cos(r), s=Math.sin(r);
-    for (let i=0;i<4;i++){const t=a[i]; o[i]=t*c-a[i+4]*s; o[i+4]=t*s+a[i+4]*c;}
-    if(o!==a)for(let i of [8,9,10,11,12,13,14,15])o[i]=a[i]; return o; },
+    for (let j=0;j<4;j++){const x=a[j], y=a[4+j];
+      o[j]=x*c+y*s; o[4+j]=y*c-x*s; o[8+j]=a[8+j]; o[12+j]=a[12+j];}
+    return o; },
   /** Rotation that carries unit vector `from` onto unit vector `to` (both
    *  normalised internally). Handles the antiparallel case gracefully. */
   fromTo(o, fx, fy, fz, tx, ty, tz) {
@@ -652,6 +667,7 @@ const GLB_COMP = {
 };
 const GLB_NCOMP = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
 const GL_TARGET_ARRAY_BUFFER = 0x8892, GL_TARGET_ELEMENT_ARRAY_BUFFER = 0x8893;
+let ANISO = 0;   // EXT_texture_filter_anisotropic enum, set once a GL context exists
 
 /**
  * Split a GLB ArrayBuffer into its JSON document + binary blob.
@@ -814,7 +830,6 @@ async function glbTexture(gl, gltf, bin, texIndex) {
     return null;
   }
 }
-let ANISO = 0; // set once context exists
 
 /**
  * Parse a GLB into GPU-ready structures.
@@ -826,16 +841,9 @@ async function parseGLB(gl, arrayBuffer, label, opts) {
   const asset = {
     label, gltf: g, bin, prims: [], nodes: [], skins: [], textures: new Map(),
     bounds: { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] },
+    scale: 1,
     ok: true
   };
-  /* ---- shared white texture used whenever a material has no map ---------- */
-  asset.white = (() => {
-    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    return t;
-  })();
   /* ---- materials: resolve PBR factors + textures ------------------------- */
   const mats = (g.materials || []).map((m, mi) => {
     const pbr = m.pbrMetallicRoughness || {};
@@ -1009,7 +1017,6 @@ async function parseGLB(gl, arrayBuffer, label, opts) {
       for (const k in p.gpu) gl.deleteBuffer(p.gpu[k]);
     }
     for (const t of asset.textures.values()) if (t) gl.deleteTexture(t);
-    if (asset.white) gl.deleteTexture(asset.white);
     for (const s of asset.skins) gl.deleteBuffer(s.gpuBuf);
     asset.prims.length = 0;
   };
@@ -1346,6 +1353,13 @@ class Renderer {
     if (!gl) throw new Error('WebGL2 unsupported');
     ANISO = gl.getExtension('EXT_texture_filter_anisotropic')
       ? gl.getExtension('EXT_texture_filter_anisotropic').TEXTURE_MAX_ANISOTROPY_EXT : 0;
+    // shared 1x1 white texture — created BEFORE any GLB parsing so that
+    // material fallbacks can reference it (single owner: the Renderer).
+    this.whiteTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.whiteTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255,255,255,255]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
     gl.cullFace(gl.BACK);
@@ -1362,12 +1376,6 @@ class Renderer {
     this.vaoCache = new Map();                // key -> vao (+attrib descriptors)
     this.jointTex = null; this.jointTexW = 0; this.jointData = null;
     this.pointTex = this.makeFloatTexture(8, 1, new Float32Array(8 * 4));
-    // white texture doubles as the "everything lit" shadow fallback + missing maps
-    this.whiteTex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, this.whiteTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     this.stats = { draws: 0, tris: 0 };
     this.w = 1; this.h = 1;
     this.program = null;
@@ -1864,12 +1872,12 @@ class Renderer {
  *   atlas_hangar_ld: Bone_Pelvis_01 / Bone_Tower(_End)_017/018 / Bone_Antlers_019 /
  *     Bone_[LR]_Arm_1..3 / Bone_Leg[LR]_Upper|Middle|Lower|Foot / SS2_043 (shield)
  *   kitsune_harpy_rig: B_38 (pelvis) / Head_17 / Tail [LTR]_* / L1..L5 [LR]_* (wing arms) */
-const RIG_PATTERNS = {
-  hips:    ['bone_pelvis', 'b_38', 'pelvis', 'hips'],
+const RIG_PATTERNS_ATLAS = {
+  hips:    ['bone_pelvis', 'pelvis', 'hips'],
   spine1:  ['bone_hip_02', 'hip_root'],
-  spine2:  ['bone_tower_0', 'spine_2', 'chest'],
-  neck:    ['tower_end', 'neck'],
-  head:    ['antlers', 'head_1', 'head', 'tower_end'],
+  spine2:  ['bone_tower_017', 'bone_tower_0', 'spine_2', 'chest'],
+  neck:    ['bone_tower_end', 'neck'],
+  head:    ['antlers', 'head_1', 'head'],
   shield:  ['ss2_0', 'shield'],
   clavL:   ['l_arm_1', 'shoulder_l', 'clavicle_l'],
   upperL:  ['l_arm_2', 'upperarm_l'],
@@ -1888,17 +1896,31 @@ const RIG_PATTERNS = {
   kneeR:   ['legr_middle', 'calf_r'],
   ankleR:  ['legr_lower', 'shin_r'],
   footR:   ['legr_foot_0', 'foot_r'],
-  /* kitsune tail fan + wing chains (quadruped/bird fallback rig layer) */
-  tailC:   ['tail t_', 'tail_t'],
-  tailL:   ['tail l_', 'tail_l'],
-  tailR:   ['tail r_', 'tail_r'],
-  wingAL:  ['l1 l_', 'l1_l'],
-  wingBL:  ['l2 l_', 'l2_l'],
-  wingCL:  ['l3 l_', 'l3_l'],
-  wingAR:  ['l1 r_', 'l1_r'],
-  wingBR:  ['l2 r_', 'l2_r'],
-  wingCR:  ['l3 r_', 'l3_r']
 };
+/** kitsune_harpy_rig is a quadruped bird-woman: pelvis B_38, Head_17, two
+ *  wing arms L1..L5 (left/right), tail fan T/L/R — mapped onto the humanoid
+ *  slots so the same pose code drives it (wings = "arms", tail = sway). */
+const RIG_PATTERNS_KITSUNE = {
+  hips:   ['b_38'],
+  spine1: ['main_39'],
+  spine2: ['b_38'],
+  neck:   ['head_17'],
+  head:   ['head_17'],
+  jaw:    ['jaw_0'],
+  clavL:  ['l1 l_', 'l1_l'], upperL: ['l2 l_', 'l2_l'], foreL: ['l3 l_', 'l3_l'], handL: ['l4 l_', 'l4_l'],
+  clawL:  ['l5 l_', 'l5_l'],
+  clavR:  ['l1 r_', 'l1_r'], upperR: ['l2 r_', 'l2_r'], foreR: ['l3 r_', 'l3_r'], handR: ['l4 r_', 'l4_r'],
+  clawR:  ['l5 r_', 'l5_r'],
+  tailC:  ['tail t_', 'tail_t'], tailL: ['tail l_', 'tail_l'], tailR: ['tail r_', 'tail_r'],
+  ikL:    ['ik l_', 'ik_l'], poleL: ['ik pole l_'], tipL: ['x3 l_', 'x3_l'],
+  ikR:    ['ik r_', 'ik_r'], poleR: ['ik pole r_'], tipR: ['x3 r_', 'x3_r'],
+};
+/** Pick the pattern table whose slot names match the asset's joint list. */
+function rigPatternsFor(asset, skin) {
+  const nm = skin.joints.map(j => (asset.nodes[j] ? asset.nodes[j].name : '').toLowerCase()).join('|');
+  if (nm.indexOf('b_38') !== -1 || nm.indexOf('tail l_') !== -1) return RIG_PATTERNS_KITSUNE;
+  return RIG_PATTERNS_ATLAS;
+}
 
 /**
  * Build a semantic rig descriptor from a parsed skin + node list.
@@ -1909,10 +1931,12 @@ const RIG_PATTERNS = {
 function buildRig(asset, skin) {
   const rig = { ok: !!skin, map: {}, joints: skin ? skin.joints : [], skin };
   if (!skin) return rig;
+  const PATTERNS = rigPatternsFor(asset, skin);
+  rig.kind = PATTERNS === RIG_PATTERNS_KITSUNE ? 'kitsune' : 'atlas';
   const used = new Set();
   const nameOf = (nodeIdx) => (asset.nodes[nodeIdx] ? asset.nodes[nodeIdx].name : '');
-  for (const slot in RIG_PATTERNS) {
-    const pats = RIG_PATTERNS[slot];
+  for (const slot in PATTERNS) {
+    const pats = PATTERNS[slot];
     let found = -1;
     for (let j = 0; j < skin.joints.length; j++) {
       if (used.has(j)) continue;
@@ -2543,7 +2567,7 @@ function raySphere(ro, rd, c, r) {
   const t = -b - s;
   return t >= 0 ? t : (-b + s >= 0 ? 0 : Infinity);
 }
-//__CHUNK6__
+
 
 /* ==========================================================================
  * === GAME WORLD ===========================================================
@@ -2837,7 +2861,7 @@ class Particles {
     return count;
   }
 }
-//__CHUNK7__
+
 
 /* ==========================================================================
  * === SKINNED MECH (GLB) ===================================================
@@ -2884,6 +2908,9 @@ class SkinnedMech {
     this.bindMax = mx.map(v => v * this.scale);
     this.height = this.bindMax[1] - this.bindMin[1];
     this.radius = Math.max(this.bindMax[0], this.bindMax[2]) * 0.75;
+    // rest-pose local matrices (computeNodeWorlds(false) leaves them in node.local)
+    this.restLocal = asset.nodes.map(n => Float32Array.from(n.local));
+    this._chainW = asset.nodes.map(() => MAT4_ID());
     /* GPU: one VAO per skinned primitive, shared skin texture buffer */
     const gl = GL.gl;
     this.gpuPrims = [];
@@ -2908,14 +2935,19 @@ class SkinnedMech {
       bufs.J = loc(3, 4, p.cpu.JOINTS_0, gl.FLOAT);   // uploaded as float view of uint16
       bufs.W = loc(4, 4, p.cpu.WEIGHTS_0);
       gl.disableVertexAttribArray(5); gl.vertexAttrib3f(5, 1, 1, 1);
-      let ibo = null;
+      let ibo = null, iboCount = 0, iboType = gl.UNSIGNED_SHORT;
       if (p.indexed) {
         ibo = gl.createBuffer();
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, p.cpu.IBO, gl.STATIC_DRAW);
+        iboCount = p.cpu.IBO.length;
+        iboType = p.cpu.IBO instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
       }
       gl.bindVertexArray(null);
-      this.gpuPrims.push({ vao, ibo, count: p.count, indexed: p.indexed, mat: p.mat });
+      this.gpuPrims.push({
+        vao, ibo, iboCount, iboType, count: p.count, indexed: p.indexed, mat: p.mat,
+        cpu: p.cpu, tex: null, normalMat: MAT4_ID(), _nmOk: false
+      });
     }
     // joint texture buffer lives on the skin (shared by all instances)
     if (!this.skin.texBuf) {
@@ -2935,57 +2967,69 @@ class SkinnedMech {
   update(dt, t) {
     this.animT += dt;
     const rig = this.rig, M = this.skin.jointMat, nodes = this.asset.nodes;
-    // start from rest local matrices (already in node.local after computeNodeWorlds(false))
-    for (let i = 0; i < nodes.length; i++) mat4.copy(this.tmpLocal(i), nodes[i].local);
-    const A = (slot, ax, ay, az, ang) => {
+    // start from REST local matrices every frame (additive layers only)
+    for (let i = 0; i < nodes.length; i++) mat4.copy(this.tmpLocal(i), this.restLocal[i]);
+    const kitsune = rig.kind === 'kitsune';
+    const A = (slot, rx, ry, rz) => {
       const ni = rig.bones[slot];
       if (ni === undefined || ni < 0) return;
       const m = this.tmpLocal(ni);
-      mat4.rotX(m, m, ax); mat4.rotY(m, m, ay); mat4.rotZ(m, m, az);
+      if (rx) mat4.rotX(m, m, rx);
+      if (ry) mat4.rotY(m, m, ry);
+      if (rz) mat4.rotZ(m, m, rz);
     };
     const walk = clamp(vec3.len(this.vel) * 0.55, 0, 1.4);
     const ph = this.animT * (2.2 + walk * 4.5) + this.phase;
     const s = Math.sin(ph), c2 = Math.sin(ph * 2), sw = Math.sin(t * 0.8 + this.phase);
-    // torso bob & lean
-    A('hips', 0, 0, walk * 0.06 * s, 0);
     this.bobY = Math.abs(c2) * 0.06 * walk;
-    A('spine2', walk * 0.05, s * 0.05 * walk, 0);
-    A('neck', -walk * 0.04 + sw * 0.02, 0);
-    A('head', Math.sin(t * 1.3 + this.phase) * 0.03, Math.sin(t * 0.6) * 0.08 * (this.dead ? 0 : 1));
-    // arms: counter-swing to legs; raise while firing
-    const fire = this.fireGlow;
-    A('clavL', 0, 0, -s * 0.35 * walk - fire * 1.15);
-    A('upperL', s * 0.5 * walk + fire * 0.2, 0, -0.12 - fire * 0.25);
-    A('foreL', -Math.abs(s) * 0.25 * walk - fire * 0.35);
-    A('clavR', 0, 0, s * 0.35 * walk - fire * 1.15);
-    A('upperR', -s * 0.5 * walk + fire * 0.2, 0, 0.12 + fire * 0.25);
-    A('foreR', -Math.abs(s) * 0.25 * walk - fire * 0.35);
-    // legs
-    A('thighL', -s * 0.5 * walk);
-    A('kneeL', Math.max(0, s) * 0.7 * walk);
-    A('ankleL', s * 0.3 * walk);
-    A('thighR', s * 0.5 * walk);
-    A('kneeR', Math.max(0, -s) * 0.7 * walk);
-    A('ankleR', -s * 0.3 * walk);
-    // tail fan / wings (kitsune fallback layer — harmless no-ops on atlas)
-    A('tailC', Math.sin(t * 2.1 + this.phase) * 0.12);
-    A('tailL', Math.sin(t * 2.1 + 1.1) * 0.12, 0.18 + Math.sin(t * 0.9) * 0.06);
-    A('tailR', Math.sin(t * 2.1 - 1.1) * 0.12, -0.18 - Math.sin(t * 0.9) * 0.06);
-    const flap = this.dead ? 0 : Math.sin(t * 1.7 + this.phase) * 0.14 + 0.1;
-    A('wingAL', 0, 0, flap); A('wingBL', 0, 0, flap * 0.7); A('wingCL', 0, 0, flap * 0.4);
-    A('wingAR', 0, 0, -flap); A('wingBR', 0, 0, -flap * 0.7); A('wingCR', 0, 0, -flap * 0.4);
+    if (!this.dead) this.yaw = lerp(this.yaw, this.targetYaw, damp(9, dt));
+    if (kitsune) {
+      /* kitsune_harpy_rig: quadruped bird-woman. B_38 pelvis drives the body,
+         Head_17 looks around, L1..L5 chains are wings, Tail [LTR] is a fan. */
+      A('hips', 0, 0, walk * 0.05 * s);
+      A('spine1', walk * 0.04, s * 0.04 * walk, 0);
+      A('head', -walk * 0.03 + sw * 0.02, Math.sin(t * 0.6) * 0.12, 0);
+      const flap = Math.sin(t * (1.4 + walk * 3.2) + this.phase) * (0.10 + walk * 0.45);
+      A('clavL', 0, 0, flap);       A('upperL', 0, 0, flap * 0.65); A('foreL', 0, 0, flap * 0.35);
+      A('clavR', 0, 0, -flap);      A('upperR', 0, 0, -flap * 0.65); A('foreR', 0, 0, -flap * 0.35);
+      const tw = Math.sin(t * 1.7 + this.phase);
+      A('tailC', tw * 0.08, tw * 0.10, 0);
+      A('tailL', 0, tw * 0.06, 0);
+      A('tailR', 0, -tw * 0.06, 0);
+    } else {
+      // torso bob & lean (atlas tower chassis)
+      A('hips', 0, 0, walk * 0.06 * s);
+      A('spine2', walk * 0.05, s * 0.05 * walk, 0);
+      A('neck', -walk * 0.04 + sw * 0.02, 0, 0);
+      A('head', Math.sin(t * 1.3 + this.phase) * 0.03, Math.sin(t * 0.6) * 0.08, 0);
+      // arms: counter-swing to legs; raise while firing
+      const fire = this.fireGlow;
+      A('clavL', 0, 0, -s * 0.35 * walk - fire * 1.15);
+      A('upperL', s * 0.5 * walk + fire * 0.2, 0, -0.12 - fire * 0.25);
+      A('foreL', -Math.abs(s) * 0.25 * walk - fire * 0.35, 0, 0);
+      A('clavR', 0, 0, s * 0.35 * walk - fire * 1.15);
+      A('upperR', -s * 0.5 * walk + fire * 0.2, 0, 0.12 + fire * 0.25);
+      A('foreR', -Math.abs(s) * 0.25 * walk - fire * 0.35, 0, 0);
+      // legs
+      A('thighL', -s * 0.5 * walk, 0, 0);
+      A('kneeL', Math.max(0, s) * 0.7 * walk, 0, 0);
+      A('ankleL', s * 0.3 * walk, 0, 0);
+      A('thighR', s * 0.5 * walk, 0, 0);
+      A('kneeR', Math.max(0, -s) * 0.7 * walk, 0, 0);
+      A('ankleR', -s * 0.3 * walk, 0, 0);
+    }
     // death: collapse forward
     if (this.dead) {
       const k = clamp(this.deathT / 1.4, 0, 1);
       const ease = k * k;
-      A('hips', ease * 1.15); A('spine2', ease * 0.5); A('head', -ease * 0.8);
+      A('hips', ease * 1.15, 0, 0); A('spine2', ease * 0.5, 0, 0); A('spine1', ease * 0.3, 0, 0);
+      A('head', -ease * 0.8, 0, 0);
       A('clavL', 0, 0, ease * 1.6); A('clavR', 0, 0, -ease * 1.6);
-      A('thighL', ease * 0.9); A('thighR', ease * 0.9);
+      A('upperL', ease * 0.9, 0, 0); A('upperR', ease * 0.9, 0, 0);
+      A('thighL', ease * 0.9, 0, 0); A('thighR', ease * 0.9, 0, 0);
     }
-    // ---- rebuild world chain from _rootJoint down, write jointMat --------
-    const rootJoint = nodes[this.skin.joints[0]];
+    // ---- rebuild world chain from the skeleton root down, write jointMat --
     const rootIdx = this.skin.joints[0];
-    // instance root matrix: translate(pos) * rotY(yaw) * scale
     const RW = this.rootWorld;
     mat4.ident(RW);
     mat4.translate(RW, RW, [this.pos[0], this.pos[1] + this.bobY, this.pos[2]]);
@@ -2993,10 +3037,14 @@ class SkinnedMech {
     mat4.scale(RW, RW, [this.scale, this.scale, this.scale]);
     this._writeChain(rootIdx, RW, M, t);
     // muzzle/eye anchors (bone tips in world space)
-    this._anchor(rig.bones.handL !== undefined && rig.bones.handL >= 0 ? rig.bones.handL : rig.bones.foreL, this.muzzle);
+    const handL = rig.bones.handL !== undefined && rig.bones.handL >= 0 ? rig.bones.handL : rig.bones.foreL;
+    this._anchor(handL, this.muzzle);
     this._anchor(rig.bones.head, this.eyePos);
-    if (this.muzzle[1] === 0 && this.muzzle[2] === 0) vec3.set(this.muzzle, this.pos[0], this.pos[1] + this.height * 0.55, this.pos[2]);
-    // upload joints
+    if (!this._muzzleOk) {
+      vec3.set(this.muzzle, this.pos[0], this.pos[1] + this.height * 0.55, this.pos[2]);
+      vec3.set(this.eyePos, this.pos[0], this.pos[1] + this.height * 0.8, this.pos[2]);
+    }
+    // upload joints into the skin's float texture
     const gl = GL.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.skin.texBuf);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.skin.texW, this.skin.texH, gl.RGBA, gl.FLOAT, M);
@@ -3004,15 +3052,17 @@ class SkinnedMech {
   _writeChain(ni, parentWorld, M, t) {
     const nodes = this.asset.nodes;
     const n = nodes[ni];
-    const w = MAT4_ID();
+    const w = this._chainW[ni];
     mat4.mul(w, parentWorld, this.tmpLocal(ni));
+    this._lastWorld = this._chainW;
+    if (parentWorld === this.rootWorld) this._muzzleOk = true;
     const ji = this._jointIndexOf(ni);
     if (ji >= 0) {
       // jointMat = world * inverseBindMatrix
       const ibm = this.skin.ibm.subarray(ji * 16, ji * 16 + 16);
       mat4.mul(M.subarray(ji * 16, ji * 16 + 16), w, ibm);
     }
-    for (const ch of n.children) this._writeChain(ch, w, M, t);
+    for (const ch of n.children) if (ch >= 0 && ch < nodes.length) this._writeChain(ch, w, M, t);
   }
   _jointIndexOf(nodeIdx) {
     if (!this._jmap) {
@@ -3068,6 +3118,20 @@ class SkinnedMech {
     r.u1f(prog, 'uHitFlash', this.hitFlash);
     r.u1i(prog, 'uUnlit', 0);
     r.u1i(prog, 'uUseVColor', 0);
+    // rotation-only normal matrix (uniform scale cancels out)
+    {
+      const m = this.rootWorld;
+      mat4.toQuat(_s.q1, m);
+      mat4.compose(_s.mTmp, _s.v1.set ? (vec3.set(_s.v1, 0, 0, 0), _s.v1) : _s.v1, _s.q1, vec3.set(_s.v3, 1, 1, 1));
+      const l = prog.u.uNormalMat;
+      if (l) {
+        const nm = this._normalMat9 || (this._normalMat9 = new Float32Array(9));
+        nm[0]=_s.mTmp[0]; nm[1]=_s.mTmp[1]; nm[2]=_s.mTmp[2];
+        nm[3]=_s.mTmp[4]; nm[4]=_s.mTmp[5]; nm[5]=_s.mTmp[6];
+        nm[6]=_s.mTmp[8]; nm[7]=_s.mTmp[9]; nm[8]=_s.mTmp[10];
+        gl.uniformMatrix3fv(l, false, nm);
+      }
+    }
     for (const gp of this.gpuPrims) {
       const mat = gp.mat;
       const base = mat ? mat.base : [0.7, 0.7, 0.7];
@@ -3077,9 +3141,16 @@ class SkinnedMech {
       const em = mat && mat.emissive ? mat.emissive : [0, 0, 0];
       r.u3(prog, 'uEmissive', em);
       r.u1f(prog, 'uEmissiveBoost', (em[0] + em[1] + em[2]) > 0.02 ? 1.6 : 1.0);
-      if (mat && mat.baseTex >= 0 && gp.tex) {
+      if (gp.tex) {
         r.bindTex(prog, 'uBaseTexS', gp.tex, 0);
         r.u1i(prog, 'uUseBaseTex', 1);
+      } else if (mat && mat.baseTex >= 0 && !gp.texFailed) {
+        // lazy texture resolve through the owning asset (async-safe)
+        gp.texFailed = true;
+        const self = this;
+        this.asset.texFor(mat.baseTex).then((tx) => { if (tx) gp.tex = tx; }).catch(() => {});
+        r.bindTex(prog, 'uBaseTexS', st.whiteTex, 0);
+        r.u1i(prog, 'uUseBaseTex', 0);
       } else {
         r.bindTex(prog, 'uBaseTexS', st.whiteTex, 0);
         r.u1i(prog, 'uUseBaseTex', 0);
@@ -3246,19 +3317,18 @@ function batchAsset(gl, asset, filter) {
   return batches;
 }
 
-/** Prepare a skin for GPU skinning: float joint texture sized to its joints. */
+/** Prepare a skin for GPU skinning. The mesh shader reads matrix j from the
+ *  RGBA32F strip texels [j*4 .. j*4+3] addressed as x = b % W, y = b / W with
+ *  b = j*4 — i.e. a flat 4·count-texel strip padded to width `texW`. */
 function prepSkin(r, asset, skin) {
-  const W = Math.max(8, Math.ceil(Math.sqrt(skin.count * 4)));
+  const W = Math.max(8, skin.count * 4);
   skin.texW = W;
-  skin.jointTexData = new Float32Array(W * W * 4);
-  for (let j = 0; j < skin.count; j++) {          // identity prefill
-    const b = j * 4, x = b % W, y = (b / W) | 0;
-    for (let c = 0; c < 4; c++) {
-      const off = ((y * W) + x + c) * 4;
-      for (let k = 0; k < 4; k++) skin.jointTexData[off + k] = (c === k) ? 1 : 0;
-    }
-  }
-  skin.texBuf = r.makeFloatTexture(W, W, skin.jointTexData);
+  skin.jointTexData = new Float32Array(W * 4);   // one row of 4-component texels
+  let o = 0;
+  for (let j = 0; j < skin.count; j++)           // identity prefill
+    for (let c = 0; c < 4; c++)
+      for (let k = 0; k < 4; k++) skin.jointTexData[o++] = (c === k) ? 1 : 0;
+  skin.texBuf = r.makeFloatTexture(W, 1, skin.jointTexData);
   skin.prims = [];
   for (const prim of asset.prims) {
     if (!prim.skinned) continue;
@@ -3294,4 +3364,4 @@ function clusterRobot(asset) {
   });
   return [...map.values()].sort((a, b) => b.length - a.length);
 }
-//__CHUNK9__
+
