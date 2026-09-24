@@ -92,8 +92,6 @@ class Game {
     this.prepWorld();
     window.__BOOT_DONE = true;
     this.setOverlay('menu');
-    this.last = performance.now();
-    requestAnimationFrame((t) => this.frame(t));
     logLine('boot complete — entering MENU');
   }
 

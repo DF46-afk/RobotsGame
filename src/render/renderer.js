@@ -21,6 +21,15 @@ class Renderer {
       powerPreference: 'high-performance', preserveDrawingBuffer: false
     });
     if (!gl) throw new Error('WebGL2 unsupported');
+    // Float / half-float colour buffers are an *extension* in WebGL2: without
+    // EXT_color_buffer_float (or the half-float variant) RGBA16F/RGBA32F FBOs
+    // are incomplete and every pass silently fails -> black screen. Pick the
+    // best renderable colour format once and reuse it everywhere.
+    const cbf = gl.getExtension('EXT_color_buffer_float');
+    const cbhf = cbf ? null : gl.getExtension('EXT_color_buffer_half_float');
+    this.hdrCapable = !!(cbf || cbhf);
+    this.sceneFmt = this.hdrCapable ? gl.RGBA16F : gl.RGBA8;
+    this.sceneType = this.hdrCapable ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
     setAniso(gl.getExtension('EXT_texture_filter_anisotropic')
       ? gl.getExtension('EXT_texture_filter_anisotropic').TEXTURE_MAX_ANISOTROPY_EXT : 0);
     // shared 1x1 white texture — created BEFORE any GLB parsing so that
@@ -56,11 +65,30 @@ class Renderer {
     this.resize();
   }
   /* ------------------------- resources ----------------------------------- */
+  /** CPU-side float RGBA texture (point-light colours). Linear sampling of
+   *  float textures requires OES_texture_float_linear; fall back to NEAREST. */
   makeFloatTexture(w, h, data) {
     const gl = this.gl;
+    if (!this._floatLinear && !this._checkedFloatLinear) {
+      this._checkedFloatLinear = true;
+      this._floatLinear = !!gl.getExtension('OES_texture_float_linear');
+    }
+    const filt = this._floatLinear ? gl.LINEAR : gl.NEAREST;
     const t = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, t);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, h, 0, gl.RGBA, gl.FLOAT, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+  }
+  /** Renderable half/float target texture used by the post chain. */
+  makeColorTarget(w, h) {
+    const gl = this.gl;
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, this.sceneFmt, w, h, 0, gl.RGBA, this.sceneType, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -212,13 +240,7 @@ class Renderer {
     const mk = (bw, bh, depth) => {
       const fb = gl.createFramebuffer();
       gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-      const tex = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, bw, bh, 0, gl.RGBA, gl.HALF_FLOAT, null);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      const tex = this.makeColorTarget(bw, bh);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
       let db = null;
       if (depth) {
@@ -227,13 +249,25 @@ class Renderer {
         gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, bw, bh);
         gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, db);
       }
+      // validate once per size change; if the HDR path is broken on this
+      // driver, rebuild everything as plain RGBA8 so *something* renders
+      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      return { fb, tex, db, w: bw, h: bh };
+      return { fb, tex, db, w: bw, h: bh, ok: status === gl.FRAMEBUFFER_COMPLETE };
     };
     this.scene = mk(w, h, true);
     const bw = Math.max(2, w >> 1), bh = Math.max(2, h >> 1);
     this.bloomA = mk(bw, bh, false);
     this.bloomB = mk(bw, bh, false);
+    if (!(this.scene.ok && this.bloomA.ok && this.bloomB.ok) && this.hdrCapable) {
+      console.warn('[metascape] HDR framebuffer incomplete — falling back to RGBA8 targets');
+      this.disposeTargets();
+      this.hdrCapable = false;
+      this.sceneFmt = gl.RGBA8; this.sceneType = gl.UNSIGNED_BYTE;
+      this.scene = mk(w, h, true);
+      this.bloomA = mk(bw, bh, false);
+      this.bloomB = mk(bw, bh, false);
+    }
     // shadow map
     const S = CONFIG.shadow.size;
     this.shadowTex = gl.createTexture();
