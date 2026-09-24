@@ -51,20 +51,35 @@ const FS_MESH = `#version 300 es
 precision highp float;
 in vec3 vWorld; in vec3 vNormal; in vec2 vUV; in vec3 vColor;
 out vec4 fragColor;
-uniform vec3 uCamPos, uBaseColor, uEmissive, uLightDir, uLightColor, uSkyColor, uGroundColor, uFogColor;
-uniform float uMetallic, uRoughness, uAlpha, uEmissiveBoost, uFogDensity, uTime, uHitFlash;
-uniform int uUseBaseTex, uUnlit, uReceiveShadow;
-uniform sampler2D uBaseTexS;      // baseColor map (unit 0) — declared here so it is never optimized out
-uniform bool uUseVColor;          // fold per-vertex COLOR_0 into albedo (city props)
-uniform highp sampler2DShadow uShadowMap;   // hardware PCF depth texture
+uniform vec3 uCamPos;
+uniform vec3 uBaseColor;
+uniform vec3 uEmissive;
+uniform vec3 uLightDir;
+uniform vec3 uLightColor;
+uniform vec3 uSkyColor;
+uniform vec3 uGroundColor;
+uniform vec3 uFogColor;
+uniform float uMetallic;
+uniform float uRoughness;
+uniform float uAlpha;
+uniform float uEmissiveBoost;
+uniform float uFogDensity;
+uniform float uTime;
+uniform float uHitFlash;
+uniform int uUseBaseTex;
+uniform int uUnlit;
+uniform int uReceiveShadow;
+uniform sampler2D uBaseTexS;
+uniform bool uUseVColor;
 uniform mat4 uLightVP;
-uniform sampler2D uPointColors;   // RGBA32F texture: xyz=color, w=intensity, up to 8 lights
+uniform sampler2D uPointColors;
 uniform int uNumPoints;
 uniform vec3 uPointPos[8];
 uniform float uShadowBias;
+uniform highp sampler2DShadow uShadowMap;
 uniform int uUseLightmap;
-uniform sampler2D uLightmap;      // R = baked AO toward sun, G = dynamic scorch heat
-uniform vec4 uLMRect;             // world-space origin + cell size (minX, minZ, dx, dz)
+uniform sampler2D uLightmap;
+uniform vec4 uLMRect;
 const float PI = 3.14159265359;
 float D_GGX(float nh, float r){ float a = r*r; float d = nh*nh*(a*a-1.0)+1.0; return a*a/(PI*d*d+1e-7); }
 float V_SmithGGX(float nv,float nl,float r){ float a=r*r; float gv=nv*sqrt(nl*nl*(1.0-a*a)+a*a); float gl=nl*sqrt(nv*nv*(1.0-a*a)+a*a); return 0.5/max(gv+gl,1e-6); }
@@ -72,30 +87,30 @@ vec3 F_Schlick(vec3 f0,float u){ return f0 + (1.0-f0)*pow(1.0-u,5.0); }
 vec3 fresnelRoughness(float ct, vec3 f0, float rough){
   return f0 + (max(vec3(1.0-rough),f0)-f0)*pow(clamp(1.0-ct,0.0,1.0),5.0);
 }
-/** Shadow lookup: world-space offset along the normal kills acne on thin
- *  geometry, constant depth bias handles the rest, hardware PCF smooths edges. */
+
 float shadowFactor(vec3 wpos, vec3 n, vec3 lightDir){
   if(uReceiveShadow==0) return 1.0;
   vec4 ls = uLightVP * vec4(wpos + n*uShadowBias*2.0 + lightDir*uShadowBias, 1.0);
   vec3 sc = ls.xyz/ls.w*0.5+0.5;
   if(sc.z>1.0||sc.x<0.0||sc.x>1.0||sc.y<0.0||sc.y>1.0) return 1.0;
-  return texture(uShadowMap, sc.xy);
+  float s0 = textureProj(uShadowMap, ls);
+  return s0;
 }
 vec3 lighting(vec3 albedo, float metal, float rough, vec3 n, vec3 v){
   vec3 f0 = mix(vec3(0.04), albedo, metal);
   vec3 diffCol = albedo*(1.0-metal);
-  vec3 Ldir = normalize(uLightDir);          // direction TOWARD the sun
-  vec3 L = -Ldir;                            // light travel direction
+  vec3 Ldir = normalize(uLightDir);
+  vec3 L = -Ldir;
   vec3 H = normalize(L+v);
   float nh=max(dot(n,H),0.0), nl=max(dot(n,L),0.0), nv=max(dot(n,v),1e-4);
   float sh = shadowFactor(vWorld, n, Ldir);
   vec3 spec = F_Schlick(f0,max(dot(H,v),0.0))*D_GGX(nh,rough)*V_SmithGGX(nv,nl,rough)*nl*uLightColor*sh;
   vec3 diff = diffCol*nl*uLightColor*sh*0.85;
-  // hemisphere ambient IBL approximation
+
   float hemi = dot(n, vec3(0.0,1.0,0.0))*0.5+0.5;
   vec3 amb = mix(uGroundColor, uSkyColor, hemi)*mix(vec3(1.0),albedo,metal)*0.55;
   vec3 envSpec = mix(uGroundColor,uSkyColor,hemi)*fresnelRoughness(nv,f0,rough)*(1.0-rough)*0.6;
-  // point lights (tracer bolts + impacts)
+
   vec3 pts = vec3(0.0);
   for(int i=0;i<8;i++){
     if(i>=uNumPoints) break;
@@ -116,7 +131,7 @@ void main(){
   if(uUseBaseTex==1){
     vec4 t = texture(uBaseTexS, vUV);
     albedo *= t.rgb;
-    metal *= 1.0;                 // single-texture assets: keep factor metallic
+    metal *= 1.0;
     rough = clamp(rough*t.a*1.2,0.04,1.0);
   }
   if(uUseVColor) albedo *= vColor;
@@ -130,16 +145,15 @@ void main(){
   vec3 v = normalize(uCamPos - vWorld);
   vec3 col = lighting(albedo, metal, rough, n, v);
   if(uUseLightmap==1){
-    // planar lightmap: baked sun-facing AO (R) + dynamic scorch heat (G)
     vec2 luv = (vWorld.xz - uLMRect.xy)/uLMRect.zw;
     vec4 lm = texture(uLightmap, clamp(luv,0.001,0.999));
-    float upMix = smoothstep(0.55,0.9,abs(n.y));      // only affects near-flat ground
+    float upMix = smoothstep(0.55,0.9,abs(n.y));
     col = mix(col, col*lm.r, upMix);
     col += upMix*lm.g*(vec3(0.06,0.015,0.008) + vec3(0.5,0.18,0.05)*pow(lm.g,3.0)*0.25);
   }
   col += uEmissive*uEmissiveBoost;
   col = mix(col, vec3(1.0,0.35,0.35), uHitFlash);
-  // distance fog
+
   float d = length(uCamPos - vWorld);
   float fog = 1.0-exp(-d*uFogDensity);
   col = mix(col, uFogColor, clamp(fog,0.0,1.0));

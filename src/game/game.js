@@ -7,11 +7,12 @@ import { MAT4_ID, V3, mat4, quat, vec3 } from '../core/math.js';
 import { $, DEG, clamp, damp, easeInOutCubic, lerp, logLine, rnd, rndi, showFatal } from '../core/util.js';
 import { audio } from '../core/audio.js';
 import { Renderer } from '../render/renderer.js';
-import { computeNodeWorlds } from '../world/glb.js';
-import { Particles, batchAsset, makeDroneAsset, makeGlowQuads } from '../world/assets.js';
+import { computeNodeWorlds, parseGLB, prepSkin } from '../world/glb.js';
+import { Particles, batchAsset, fetchGLB, makeDroneAsset, makeGlowQuads } from '../world/assets.js';
 import { HeightMap, makeBoltPrim, makeBoxPrim } from '../anim/procedural.js';
-import { PropMech, SkinnedMech } from '../entities/mechs.js';
+import { PropMech, SkinnedMech, clusterRobot } from '../entities/mechs.js';
 import { rayAABB, resolveCircleAABB } from '../world/collision.js';
+import { renderer } from './state.js';
 
 /* ==========================================================================
  * === GAME STATE MACHINE ===================================================
@@ -1138,6 +1139,9 @@ Renderer.prototype.drawBatch = function (b, st, model, normalMat) {
 
 /** Bake one robot cluster (already node-transformed prims) into a single
  *  static indexed batch usable by PropMech. */
+/** Append all values of a typed array/plain array onto a JS array. */
+function pushArr(dst, src) { for (let i = 0; i < src.length; i++) dst.push(src[i]); }
+
 function batchCluster(gl, asset, prims) {
   const P = [], N = [], U = [], C = [], IDX = [];
   let base = 0, hasC = false, mat = null;

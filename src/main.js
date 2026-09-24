@@ -13,4 +13,6 @@ Game.prototype.setOverlay = function (n) {
   window.__GAME_STATE = this.state;
   _origSetOverlay.call(this, n);
 };
+// keep the test hook in sync with every state transition (not just overlays)
+setInterval(() => { window.__GAME_STATE = game.state; }, 100);
 game.boot().catch((e) => { showFatal('boot error: ' + ((e && e.stack) || e)); window.__BOOT_DONE = true; });

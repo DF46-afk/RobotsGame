@@ -299,4 +299,4 @@ class Particles {
 }
 
 
-export { Particles, batchAsset, makeDroneAsset, makeGlowQuads };
+export { Particles, batchAsset, fetchGLB, makeDroneAsset, makeGlowQuads };

@@ -2,6 +2,7 @@
  * section contents without checking against git history. */
 'use strict';
 
+import { CONFIG } from '../core/config.js';
 import { MAT4_ID, mat4 } from '../core/math.js';
 import { clamp, logLine } from '../core/util.js';
 
@@ -214,7 +215,7 @@ async function glbTexture(gl, gltf, bin, texIndex) {
  * Parse a GLB into GPU-ready structures.
  * @returns {Promise<Object>} asset {prims,nodes,skins,bounds,textures,ok,label}
  */
-async function parseGLB(gl, arrayBuffer, label, opts) {
+export async function parseGLB(gl, arrayBuffer, label, opts) {
   opts = opts || {};
   const { json: g, bin } = glbSplit(arrayBuffer);
   const asset = {
@@ -447,4 +448,25 @@ function expandBounds(out, m, mn, mx) {
 }
 
 
-export { computeNodeWorlds };
+/** Prepare a skin for GPU skinning. The mesh shader reads matrix j from the
+ *  RGBA32F strip texels [j*4 .. j*4+3] addressed as x = b % W, y = b / W with
+ *  b = j*4 — i.e. a flat 4·count-texel strip padded to width `texW`. */
+function prepSkin(r, asset, skin) {
+  const W = Math.max(8, skin.count * 4);
+  skin.texW = W;
+  skin.jointTexData = new Float32Array(W * 4);   // one row of 4-component texels
+  let o = 0;
+  for (let j = 0; j < skin.count; j++)           // identity prefill
+    for (let c = 0; c < 4; c++)
+      for (let k = 0; k < 4; k++) skin.jointTexData[o++] = (c === k) ? 1 : 0;
+  skin.texBuf = r.makeFloatTexture(W, 1, skin.jointTexData);
+  skin.prims = [];
+  for (const prim of asset.prims) {
+    if (!prim.skinned) continue;
+    prim._vao = r.vaoFor(prim);                   // fixed attrib layout
+    skin.prims.push(prim);
+  }
+  return skin;
+}
+
+export { computeNodeWorlds, prepSkin };
