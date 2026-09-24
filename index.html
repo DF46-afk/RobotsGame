@@ -273,7 +273,7 @@ const CONFIG = {
     skyColor: [0.22, 0.36, 0.55],
     groundColor: [0.30, 0.33, 0.37]
   },
-  shadow: { size: 1024, range: 26, bias: 0.0022, normalBias: 0.035 },
+  shadow: { size: 1024, range: 34, bias: 0.0022, normalBias: 0.035 },
   bloom: { threshold: 1.05, knee: 0.55, intensity: 0.72, radius: 1.0, samples: 9 },
   render: { maxAniso: 4, exposure: 1.18, skinJoints: 64, pixelCap: 2.35e6 },
   mech: {
@@ -526,6 +526,45 @@ const mat4 = {
   rotZ(o, a, r) { const c=Math.cos(r), s=Math.sin(r);
     for (let i=0;i<4;i++){const t=a[i]; o[i]=t*c-a[i+4]*s; o[i+4]=t*s+a[i+4]*c;}
     if(o!==a)for(let i of [8,9,10,11,12,13,14,15])o[i]=a[i]; return o; },
+  /** Rotation that carries unit vector `from` onto unit vector `to` (both
+   *  normalised internally). Handles the antiparallel case gracefully. */
+  fromTo(o, fx, fy, fz, tx, ty, tz) {
+    let dl = Math.hypot(fx, fy, fz) || 1; fx /= dl; fy /= dl; fz /= dl;
+    dl = Math.hypot(tx, ty, tz) || 1; tx /= dl; ty /= dl; tz /= dl;
+    const d = fx * tx + fy * ty + fz * tz;
+    if (d > 0.999999) return mat4.ident(o);
+    if (d < -0.999999) {                       // 180 deg: pick any perp axis
+      let ax = 1, ay = 0, az = 0;
+      if (Math.abs(fx) > 0.9) { ax = 0; ay = 1; }
+      const l = Math.hypot(ax, ay, az); ax /= l; ay /= l; az /= l;
+      const hx = fy * az - fz * ay, hy = fz * ax - fx * az, hz = fx * ay - fy * ax;
+      void hx; void hy; void hz;
+      // 180deg rotation about axis perpendicular to f: R = 2*outer(a,a)-I
+      o.fill(0);
+      o[0] = 2 * ax * ax - 1; o[5] = 2 * ay * ay - 1; o[10] = 2 * az * az - 1;
+      o[1] = o[4] = 2 * ax * ay; o[2] = o[8] = 2 * ax * az; o[6] = o[9] = 2 * ay * az;
+      o[15] = 1;
+      return o;
+    }
+    // Rodrigues construction from the half-angle vector h = normalize(f+t):
+    // cos(theta) = 2*(f·h)^2 - 1, axis = normalize(f x h), sin = |f x h|/(f·h... )
+    let hx = fx + tx, hy = fy + ty, hz = fz + tz;
+    const hl = Math.hypot(hx, hy, hz); hx /= hl; hy /= hl; hz /= hl;
+    const fh = fx * hx + fy * hy + fz * hz;            // cos(theta/2)
+    const c = 2 * fh * fh - 1;                         // cos(theta)
+    // axis = normalize(cross(f, h)) (parallel to cross(f, t))
+    let ax = fy * hz - fz * hy, ay = fz * hx - fx * hz, az = fx * hy - fy * hx;
+    const al = Math.hypot(ax, ay, az);
+    if (al < 1e-6) return mat4.ident(o);
+    ax /= al; ay /= al; az /= al;
+    const s = al * 2 * fh;                             // sin(theta) = 2 sin(t/2)cos(t/2)
+    const t1 = 1 - c;
+    o[0] = c + ax * ax * t1;      o[1] = ay * ax * t1 + az * s; o[2] = az * ax * t1 - ay * s;      o[3] = 0;
+    o[4] = ax * ay * t1 - az * s; o[5] = c + ay * ay * t1;      o[6] = az * ay * t1 + ax * s;      o[7] = 0;
+    o[8] = ax * az * t1 + ay * s; o[9] = ay * az * t1 - ax * s; o[10] = c + az * az * t1;         o[11] = 0;
+    o[12] = 0; o[13] = 0; o[14] = 0; o[15] = 1;
+    return o;
+  },
   transpose(o, a) {
     if (o === a) { let t; t=a[1];o[1]=a[4];o[4]=t; t=a[2];o[2]=a[8];o[8]=t; t=a[6];o[6]=a[9];o[9]=t;
       t=a[3];o[3]=a[12];o[12]=t; t=a[7];o[7]=a[13];o[13]=t; t=a[11];o[11]=a[14];o[14]=t; return o; }
@@ -836,8 +875,25 @@ async function parseGLB(gl, arrayBuffer, label) {
           }
         }
         if (attrs.NORMAL) prim.vbo.NORMAL = glbReadAccessor(g, bin, attrs.NORMAL).data;
-        if (attrs.TEXCOORD_0) prim.vbo.TEXCOORD_0 = glbReadAccessor(g, bin, attrs.TEXCOORD_0).data;
-        if (attrs.COLOR_0) prim.vbo.COLOR_0 = glbReadAccessor(g, bin, attrs.COLOR_0).data;
+        if (attrs.TEXCOORD_0) {
+          const uv = glbReadAccessor(g, bin, attrs.TEXCOORD_0);
+          if (uv.comps >= 2) {
+            prim.vbo.TEXCOORD_0 = uv.data instanceof Float32Array && uv.comps === 2
+              ? uv.data : (() => { const o = new Float32Array(uv.count * 2);
+                for (let i = 0; i < uv.count; i++) { o[i * 2] = uv.data[i * uv.comps]; o[i * 2 + 1] = uv.data[i * uv.comps + 1]; } return o; })();
+          }
+        }
+        if (attrs.COLOR_0) {
+          // normalise whatever component type/normalisation the accessor used
+          const c = glbReadAccessor(g, bin, attrs.COLOR_0);
+          const oc = new Float32Array(c.count * 3);
+          for (let i = 0; i < c.count; i++) {
+            oc[i * 3] = c.data[i * c.comps];
+            oc[i * 3 + 1] = c.data[i * c.comps + 1];
+            oc[i * 3 + 2] = c.data[i * c.comps + 2];
+          }
+          prim.vbo.COLOR_0 = oc; prim.hasColor = true;
+        }
         if (attrs.JOINTS_0 && attrs.WEIGHTS_0) {
           // joints: keep as float (converted to Uint16 below); weights already normalized by accessor
           const j = glbReadAccessor(g, bin, attrs.JOINTS_0);
@@ -859,15 +915,15 @@ async function parseGLB(gl, arrayBuffer, label) {
           prim.iboData = idx.data; prim.iboType = idx.glType; prim.indexed = true;
         }
         // upload immediately: keeps peak memory low and simplifies lifetime mgmt
-        prim.vboPos = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, prim.vboPos); gl.bufferData(gl.ARRAY_BUFFER, prim.vbo.POSITION, gl.STATIC_DRAW);
-        delete prim.vbo.POSITION;
         prim.gpu = {};
+        const mkGLBuf = (arr) => {
+          const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+          gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW); return b;
+        };
+        prim.gpu.POSITION = mkGLBuf(prim.vbo.POSITION); delete prim.vbo.POSITION;
         for (const key of ['NORMAL', 'TEXCOORD_0', 'COLOR_0', 'JOINTS_0', 'WEIGHTS_0']) {
           if (!prim.vbo[key]) continue;
-          const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
-          gl.bufferData(gl.ARRAY_BUFFER, prim.vbo[key], gl.STATIC_DRAW);
-          prim.gpu[key] = b; delete prim.vbo[key];
+          prim.gpu[key] = mkGLBuf(prim.vbo[key]); delete prim.vbo[key];
         }
         if (prim.indexed) {
           prim.ibo = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, prim.ibo);
@@ -932,7 +988,7 @@ async function parseGLB(gl, arrayBuffer, label) {
   };
   asset.dispose = () => {
     for (const p of asset.prims) {
-      if (p.vboPos) gl.deleteBuffer(p.vboPos);
+      if (p._vao) gl.deleteVertexArray(p._vao);
       if (p.ibo) gl.deleteBuffer(p.ibo);
       for (const k in p.gpu) gl.deleteBuffer(p.gpu[k]);
     }
@@ -999,12 +1055,13 @@ layout(location=1) in vec3 aNormal;
 layout(location=2) in vec2 aUV;
 layout(location=3) in vec4 aJoints;
 layout(location=4) in vec4 aWeights;
+layout(location=5) in vec3 aColor;   // COLOR_0 (constant 1 when absent)
 uniform mat4 uModel, uViewProj, uLightVP;
 uniform mat3 uNormalMat;
 uniform bool uSkinned;
 uniform sampler2D uJointTex;   // packed skin matrices (RGBA32F, 4 texels/matrix)
 uniform int uJointTexW;
-out vec3 vWorld; out vec3 vNormal; out vec2 vUV;
+out vec3 vWorld; out vec3 vNormal; out vec2 vUV; out vec3 vColor;
 mat4 skinMatrix(float idx){
   int b = int(idx) * 4;
   int x = b % uJointTexW; int y = b / uJointTexW;
@@ -1027,17 +1084,19 @@ void main(){
   vWorld = wp.xyz;
   vNormal = normalize(uNormalMat * n);
   vUV = aUV;
+  vColor = aColor;
   gl_Position = uViewProj * wp;
 }`;
 
 const FS_MESH = `#version 300 es
 precision highp float;
-in vec3 vWorld; in vec3 vNormal; in vec2 vUV;
+in vec3 vWorld; in vec3 vNormal; in vec2 vUV; in vec3 vColor;
 out vec4 fragColor;
 uniform vec3 uCamPos, uBaseColor, uEmissive, uLightDir, uLightColor, uSkyColor, uGroundColor, uFogColor;
 uniform float uMetallic, uRoughness, uAlpha, uEmissiveBoost, uFogDensity, uTime, uHitFlash;
 uniform int uUseBaseTex, uUnlit, uReceiveShadow;
 uniform sampler2D uBaseTexS;      // baseColor map (unit 0) — declared here so it is never optimized out
+uniform bool uUseVColor;          // fold per-vertex COLOR_0 into albedo (city props)
 uniform highp sampler2DShadow uShadowMap;   // hardware PCF depth texture
 uniform mat4 uLightVP;
 uniform sampler2D uPointColors;   // RGBA32F texture: xyz=color, w=intensity, up to 8 lights
@@ -1101,6 +1160,7 @@ void main(){
     metal *= 1.0;                 // single-texture assets: keep factor metallic
     rough = clamp(rough*t.a*1.2,0.04,1.0);
   }
+  if(uUseVColor) albedo *= vColor;
   if(uUnlit==1){
     vec3 e = albedo*uEmissiveBoost;
     fragColor = vec4(e, uAlpha);
@@ -1324,11 +1384,16 @@ class Renderer {
       if (norm) gl.vertexAttribIPointer(loc, size, type, 0, 0);
       else gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
     };
-    bind(0, prim.vboPos, 3, gl.FLOAT, false);
+    bind(0, prim.gpu.POSITION, 3, gl.FLOAT, false);
     bind(1, prim.gpu.NORMAL, 3, gl.FLOAT, false);
     bind(2, prim.gpu.TEXCOORD_0, 2, gl.FLOAT, false);
     bind(3, prim.gpu.JOINTS_0, 4, gl.UNSIGNED_SHORT, true);   // integer joints
     bind(4, prim.gpu.WEIGHTS_0, 4, gl.FLOAT, false);
+    if (prim.hasColor) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, prim.gpu.COLOR_0);
+      gl.enableVertexAttribArray(5);
+      gl.vertexAttribPointer(5, 3, gl.FLOAT, false, 0, 0);
+    }
     if (!prim.gpu.NORMAL) { // synthesise flat normal via attrib divisor-free constant
       gl.disableVertexAttribArray(1); gl.vertexAttrib3f(1, 0, 1, 0);
     }
@@ -1351,7 +1416,6 @@ class Renderer {
   freePrim(prim) {
     const gl = this.gl;
     if (prim._vao) { gl.deleteVertexArray(prim._vao); prim._vao = null; }
-    if (prim.vboPos) { gl.deleteBuffer(prim.vboPos); prim.vboPos = null; }
     if (prim.ibo) { gl.deleteBuffer(prim.ibo); prim.ibo = null; }
     if (prim.gpu) { for (const k in prim.gpu) { gl.deleteBuffer(prim.gpu[k]); } prim.gpu = {}; }
     prim._dead = true;
@@ -1635,6 +1699,7 @@ class Renderer {
     this.u1f(prog, 'uEmissiveBoost', o.emisBoost !== undefined ? o.emisBoost : (mat && mat.emissive && (mat.emissive[0] + mat.emissive[1] + mat.emissive[2]) > 0.02 ? 1.6 : 1.0));
     this.u1f(prog, 'uHitFlash', o.hitFlash || 0);
     this.u1i(prog, 'uUnlit', o.unlit ? 1 : 0);
+    this.u1i(prog, 'uUseVColor', (prim.hasColor && !o.flatColor) ? 1 : 0);
     const tex = o.baseTex !== undefined ? o.baseTex : (mat && mat.baseTex >= 0 ? prim._tex : null);
     if (tex) {
       this.bindTex(prog, 'uBaseTexS', tex, 0);
@@ -1936,7 +2001,7 @@ class ProceduralMech {
     // per-joint override rotations produced by the procedural layer
     const nj = skin ? skin.count : 1;
     this.jointRot = new Float32Array(nj * 4);   // quaternion offsets
-    this.jointPos = new Float32Array(nj * 3);   // absolute local position overrides
+    this.jointPos = new Float32Array(nj * 4);   // absolute local position overrides (vec4 slot)
     this.jointHasPos = new Uint8Array(nj);
     // computed matrices
     this.rootWorld = MAT4_ID();
@@ -2242,7 +2307,7 @@ function makeBoxPrim(gl, color, emissive) {
     const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
     gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW); return b;
   };
-  p.vboPos = mkBuf(new Float32Array(pos));
+  p.gpu.POSITION = mkBuf(new Float32Array(pos));
   p.gpu.NORMAL = mkBuf(new Float32Array(nor));
   p.gpu.TEXCOORD_0 = mkBuf(new Float32Array(uv));
   p.ibo = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, p.ibo);
@@ -2279,7 +2344,7 @@ function makeBoltPrim(gl) {
     const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
     gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW); return b;
   };
-  prim.vboPos = mkBuf(new Float32Array(pos));
+  prim.gpu.POSITION = mkBuf(new Float32Array(pos));
   prim.gpu.NORMAL = mkBuf(new Float32Array(nor));
   prim.gpu.TEXCOORD_0 = mkBuf(uv);
   return prim;
