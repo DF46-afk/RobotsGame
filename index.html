@@ -1,0 +1,2426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"/>
+<title>MECHSIGHT // Zero-Dependency WebGL2 Mech Combat</title>
+<style>
+/* ============================================================================
+   MECHSIGHT UI - pure DOM/CSS overlays (no canvas-drawn UI)
+   ========================================================================== */
+:root{
+  --acc:#3fe0ff;          /* primary accent (cyan)   */
+  --acc2:#ffb43f;         /* secondary accent (amber)*/
+  --hot:#ff3f5e;          /* danger / lock           */
+  --ok:#57ff9b;
+  --bg:#04070c;
+  --panel:rgba(6,12,20,.82);
+  --line:rgba(63,224,255,.28);
+  --mono:"Consolas","SF Mono",Menlo,"DejaVu Sans Mono",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:#d8ecf6;font-family:var(--mono)}
+canvas#gl{position:fixed;inset:0;width:100%;height:100%;display:block;background:#04070c}
+.overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:18px;text-align:center;z-index:20;transition:opacity .45s ease, transform .45s ease}
+.hidden{opacity:0 !important;pointer-events:none;transform:scale(1.02)}
+button{font-family:var(--mono);cursor:pointer;background:linear-gradient(180deg,rgba(63,224,255,.14),rgba(63,224,255,.03));
+  border:1px solid var(--line);color:var(--acc);padding:12px 26px;font-size:15px;letter-spacing:.22em;text-transform:uppercase;
+  transition:.18s;clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
+button:hover{background:rgba(63,224,255,.22);color:#fff;box-shadow:0 0 22px rgba(63,224,255,.35)}
+button.dim{border-color:rgba(255,255,255,.15);color:#8ba3b3;background:rgba(255,255,255,.03)}
+h1{font-size:min(9vw,74px);letter-spacing:.30em;font-weight:700;color:#eafaff;
+   text-shadow:0 0 26px rgba(63,224,255,.55),0 0 4px rgba(63,224,255,.9)}
+h1 span{color:var(--acc2);text-shadow:0 0 26px rgba(255,180,63,.5)}
+.sub{letter-spacing:.42em;font-size:12px;color:#7fa5b8;text-transform:uppercase}
+.scan{position:absolute;inset:0;pointer-events:none;opacity:.35;
+  background:repeating-linear-gradient(0deg,rgba(63,224,255,.05) 0 1px,transparent 1px 3px)}
+.vign{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at center,transparent 45%,rgba(0,0,0,.75) 100%)}
+/* ---------------- LOADING ---------------- */
+#loading{z-index:60;background:radial-gradient(circle at 50% 40%,#0a1522,#03060a 70%)}
+#barWrap{width:min(60vw,520px);height:10px;border:1px solid var(--line);background:rgba(0,0,0,.5);position:relative}
+#bar{position:absolute;inset:1px;width:0%;background:linear-gradient(90deg,var(--acc),#aef7ff);
+  box-shadow:0 0 16px rgba(63,224,255,.8);transition:width .25s}
+#loadText{font-size:11px;letter-spacing:.2em;color:#89b2c4;min-height:16px}
+#logBox{width:min(72vw,620px);max-height:150px;overflow:auto;font-size:10px;line-height:1.5;text-align:left;
+  color:#5f8296;border-top:1px dashed rgba(95,130,150,.3);padding-top:8px}
+#logBox b{color:var(--acc2);font-weight:400}
+/* ---------------- MENU ---------------- */
+#menu{background:linear-gradient(120deg,rgba(4,7,12,.92),rgba(4,10,18,.55) 60%,transparent)}
+.menuCard{display:flex;flex-direction:column;gap:14px;align-items:center}
+.keys{display:grid;grid-template-columns:auto auto;gap:4px 18px;font-size:11px;color:#8fb0c0;letter-spacing:.1em}
+.keys b{color:var(--acc);font-weight:400}
+/* ---------------- HANGAR ---------------- */
+#hangar{justify-content:flex-end;align-items:stretch;background:none;pointer-events:none}
+#hangar .frame{pointer-events:auto}
+#hTop{position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:flex-start;
+  padding:18px 22px;font-size:11px;letter-spacing:.28em;color:#7ea3b5}
+#hTitle{font-size:20px;letter-spacing:.34em;color:#eafaff;text-shadow:0 0 18px rgba(63,224,255,.5)}
+#cards{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;padding:0 16px 22px}
+.card{pointer-events:auto;width:min(30vw,268px);background:var(--panel);border:1px solid rgba(63,224,255,.2);
+  padding:12px 14px 14px;text-align:left;cursor:pointer;transition:.2s;position:relative;
+  clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px)}
+.card:hover{transform:translateY(-4px);border-color:var(--acc)}
+.card.sel{border-color:var(--acc2);background:linear-gradient(180deg,rgba(255,180,63,.10),rgba(6,12,20,.9));
+  box-shadow:0 0 26px rgba(255,180,63,.25) inset}
+.card h3{font-size:15px;letter-spacing:.16em;color:#eafaff;margin-bottom:2px}
+.card .role{font-size:9px;letter-spacing:.3em;color:var(--acc);margin-bottom:10px}
+.stat{display:flex;align-items:center;gap:8px;font-size:9px;letter-spacing:.16em;color:#7ea3b5;margin:5px 0}
+.stat i{font-style:normal;width:46px;color:#5f8296}
+.stat em{flex:1;height:5px;background:rgba(255,255,255,.07);position:relative;display:block;font-style:normal}
+.stat em::after{content:"";position:absolute;inset:0;width:var(--v,50%);background:linear-gradient(90deg,var(--acc),#cffaff);
+  box-shadow:0 0 8px rgba(63,224,255,.6)}
+.card .desc{font-size:9.5px;line-height:1.6;color:#6d8f9f;margin-top:9px;letter-spacing:.05em}
+#hHint{position:absolute;bottom:8px;left:0;right:0;text-align:center;font-size:9.5px;letter-spacing:.26em;color:#587c8d}
+/* ---------------- HUD ---------------- */
+#hud{position:fixed;inset:0;pointer-events:none;z-index:10;font-size:11px;letter-spacing:.14em;
+  opacity:0;transition:opacity .4s}
+#hud.on{opacity:1}
+.hudBox{position:absolute;background:linear-gradient(180deg,rgba(6,14,22,.72),rgba(4,8,14,.5));
+  border:1px solid rgba(63,224,255,.22);padding:9px 12px;backdrop-filter:blur(2px)}
+#hpPanel{left:18px;bottom:18px;width:min(34vw,300px)}
+.meter{height:11px;background:rgba(255,255,255,.06);position:relative;overflow:hidden;margin-top:4px;
+  border:1px solid rgba(63,224,255,.18)}
+.meter>i{position:absolute;inset:0;width:100%;transform-origin:left;transition:transform .18s;display:block}
+#hpFill{background:linear-gradient(90deg,#2bd6ff,#9df3ff)}
+#boostFill{background:linear-gradient(90deg,#ff9b2b,#ffe08a)}
+.lbl{display:flex;justify-content:space-between;color:#8fb6c8;font-size:9px;letter-spacing:.24em}
+#ammoPanel{right:18px;bottom:18px;text-align:right;min-width:170px}
+#ammoNum{font-size:34px;color:#eafaff;letter-spacing:.06em;line-height:1}
+#ammoNum.low{color:var(--hot)}
+#wavePanel{top:16px;left:50%;transform:translateX(-50%);text-align:center;min-width:230px}
+#waveTxt{font-size:13px;color:var(--acc2);letter-spacing:.3em}
+#objTxt{font-size:9px;color:#7ea3b5;letter-spacing:.2em;margin-top:3px}
+#scoreTxt{font-size:10px;color:#cfe9f4;margin-top:2px}
+#cross{position:absolute;left:50%;top:50%;width:46px;height:46px;transform:translate(-50%,-50%)}
+#cross svg{width:100%;height:100%;overflow:visible}
+#cross line,#cross circle{stroke:rgba(160,240,255,.85);stroke-width:1.4;fill:none;
+  filter:drop-shadow(0 0 4px rgba(63,224,255,.8))}
+#cross.lock line{stroke:var(--hot);filter:drop-shadow(0 0 5px rgba(255,63,94,.9))}
+#hitmark{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) rotate(45deg) scale(.4);
+  width:26px;height:26px;opacity:0;transition:opacity .09s, transform .09s}
+#hitmark div{position:absolute;background:#fff;box-shadow:0 0 8px #bff}
+#hitmark .a{left:12px;top:0;width:2px;height:8px}#hitmark .b{left:12px;bottom:0;width:2px;height:8px}
+#hitmark .c{top:12px;left:0;height:2px;width:8px}#hitmark .d{top:12px;right:0;height:2px;width:8px}
+#hitmark.show{opacity:1;transform:translate(-50%,-50%) rotate(45deg) scale(1)}
+#hitmark.kill div{background:var(--hot);box-shadow:0 0 10px var(--hot)}
+#feed{position:absolute;top:74px;right:18px;text-align:right;font-size:10px;line-height:1.9;color:#bfe6f5}
+#feed div{opacity:0;animation:feedIn .3s forwards;text-shadow:0 0 8px rgba(63,224,255,.5)}
+@keyframes feedIn{from{opacity:0;transform:translateX(18px)}to{opacity:1;transform:none}}
+#banner{position:absolute;top:34%;left:0;right:0;text-align:center;font-size:min(8vw,44px);letter-spacing:.34em;
+  color:#fff;text-shadow:0 0 30px rgba(63,224,255,.8);opacity:0;transition:opacity .3s}
+#banner.show{opacity:1}
+#banner small{display:block;font-size:11px;letter-spacing:.4em;color:var(--acc2);margin-top:8px}
+#lockTag{position:absolute;left:50%;top:calc(50% + 34px);transform:translateX(-50%);font-size:9px;
+  letter-spacing:.3em;color:var(--hot);opacity:0;transition:.15s}
+#lockTag.on{opacity:1}
+#dmgFlash{position:fixed;inset:0;pointer-events:none;z-index:12;opacity:0;transition:opacity .35s;
+  background:radial-gradient(ellipse at center,transparent 40%,rgba(255,40,70,.55) 100%)}
+#lowWarn{position:fixed;inset:0;pointer-events:none;z-index:11;opacity:0;transition:opacity .5s;
+  background:radial-gradient(ellipse at center,transparent 55%,rgba(255,60,90,.28) 100%)}
+#centerMsg{position:absolute;bottom:22%;left:0;right:0;text-align:center;font-size:11px;letter-spacing:.3em;color:#9fd0e2}
+#perf{position:absolute;left:18px;top:14px;font-size:9px;color:#4f7385;letter-spacing:.18em}
+/* ---------------- PAUSE / END ---------------- */
+#pause,#end{background:rgba(3,6,10,.86);backdrop-filter:blur(3px)}
+.panel{background:var(--panel);border:1px solid var(--line);padding:26px 34px;min-width:min(86vw,380px);
+  display:flex;flex-direction:column;gap:12px;align-items:center;
+  clip-path:polygon(18px 0,100% 0,100% calc(100% - 18px),calc(100% - 18px) 100%,0 100%,0 18px)}
+.panel h2{font-size:26px;letter-spacing:.3em;color:#eafaff;text-shadow:0 0 20px rgba(63,224,255,.5)}
+.row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+#endStats{font-size:11px;line-height:2;color:#8fb6c8;letter-spacing:.16em}
+#endStats b{color:var(--acc2);font-weight:400}
+#err{position:fixed;left:0;right:0;bottom:0;z-index:99;background:#3b0d16;color:#ffd8de;font-size:11px;
+  padding:8px 14px;display:none;white-space:pre-wrap;max-height:40vh;overflow:auto}
+@media (max-width:640px){.card{width:44vw}#hpPanel{width:44vw}}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<!-- ============================ HUD (gameplay) ============================ -->
+<div id="hud">
+  <div class="hudBox" id="hpPanel">
+    <div class="lbl"><span>HULL INTEGRITY</span><span id="hpVal">100%</span></div>
+    <div class="meter"><i id="hpFill"></i></div>
+    <div class="lbl" style="margin-top:7px"><span>THERMALS</span><span id="bsVal">100%</span></div>
+    <div class="meter"><i id="boostFill"></i></div>
+  </div>
+  <div class="hudBox" id="ammoPanel">
+    <div class="lbl"><span>PULSE CANNON</span><span id="heatVal">HEAT 0</span></div>
+    <div id="ammoNum">∞</div>
+    <div class="lbl"><span id="wepName">ATLAS 200mm</span><span id="tgtInfo">NO TARGET</span></div>
+  </div>
+  <div class="hudBox" id="wavePanel">
+    <div id="waveTxt">WAVE 1</div>
+    <div id="objTxt">HOSTILES DETECTED</div>
+    <div id="scoreTxt">SCORE 0</div>
+  </div>
+  <div id="cross">
+    <svg viewBox="-23 -23 46 46" id="crossSvg">
+      <g id="crossG">
+        <line x1="-20" y1="0" x2="-9" y2="0"/><line x1="20" y1="0" x2="9" y2="0"/>
+        <line x1="0" y1="-20" x2="0" y2="-9"/><line x1="0" y1="20" x2="0" y2="9"/>
+        <circle cx="0" cy="0" r="1.6"/>
+      </g>
+    </svg>
+  </div>
+  <div id="hitmark"><div class="a"></div><div class="b"></div><div class="c"></div><div class="d"></div></div>
+  <div id="lockTag">◆ LOCKED ◆</div>
+  <div id="feed"></div>
+  <div id="banner"></div>
+  <div id="centerMsg"></div>
+  <div id="perf"></div>
+</div>
+<div id="dmgFlash"></div>
+<div id="lowWarn"></div>
+
+<!-- ============================ LOADING ============================ -->
+<div class="overlay" id="loading">
+  <div class="scan"></div>
+  <div class="sub">booting combat frame</div>
+  <h1>META<span>SCAPE</span></h1>
+  <div id="barWrap"><div id="bar"></div></div>
+  <div id="loadText">initialising webgl2 context…</div>
+  <div id="logBox"></div>
+</div>
+
+<!-- ============================ MENU ============================ -->
+<div class="overlay hidden" id="menu">
+  <div class="scan"></div><div class="vign"></div>
+  <div class="sub">zero-dependency webgl2 mech combat</div>
+  <h1>META<span>SCAPE</span></h1>
+  <div class="menuCard">
+    <button id="btnDeploy">▶ Deploy to Sector</button>
+    <button id="btnHangar">Mech Hangar</button>
+    <div class="keys">
+      <b>WASD</b><span>thrust / strafe</span>
+      <b>MOUSE</b><span>look &amp; aim</span>
+      <b>LMB / RMB</b><span>fire / lock-on</span>
+      <b>SHIFT / SPACE</b><span>boost / jump</span>
+      <b>R / ESC</b><span>reload / pause</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============================ HANGAR ============================ -->
+<div class="overlay hidden" id="hangar">
+  <div class="frame" id="hTop">
+    <div><div id="hTitle">HANGAR DECK</div><div>select your machine — drag to orbit</div></div>
+    <button id="btnHangarBack" class="dim">◀ Back</button>
+  </div>
+  <div id="cards"></div>
+  <div id="hHint">LMB DRAG = ORBIT · WHEEL = ZOOM · CLICK CARD = SELECT</div>
+</div>
+
+<!-- ============================ PAUSE ============================ -->
+<div class="overlay hidden" id="pause">
+  <div class="panel">
+    <h2>PAUSED</h2>
+    <button id="btnResume">Resume</button>
+    <button id="btnQuit" class="dim">Abort Mission</button>
+  </div>
+</div>
+
+<!-- ============================ END ============================ -->
+<div class="overlay hidden" id="end">
+  <div class="panel">
+    <h2 id="endTitle">MISSION FAILED</h2>
+    <div id="endStats"></div>
+    <div class="row">
+      <button id="btnRetry">↻ Redeploy</button>
+      <button id="btnMenu" class="dim">Main Menu</button>
+    </div>
+  </div>
+</div>
+
+<div id="err"></div>
+
+<script type="module">
+/* ============================================================================
+ * MECHA / "META SCAPE" — single-file WebGL2 mech combat game.
+ * ZERO external libraries. Everything below (math, GLB parser, renderer,
+ * procedural animation, audio, gameplay) is hand written.
+ *
+ * Pipeline overview
+ *   MATH LIB   -> flat Float32Array helpers, zero allocation in hot loops
+ *   GLB PARSER -> manual DataView chunk walking + accessor de-interleaving
+ *   RENDERER   -> WebGL2, PBR + shadow map + bloom composite
+ *   ANIM       -> procedural weight shift / step bob / recoil springs / IK
+ *   GAME       -> LOADING -> MENU -> HANGAR -> GAMEPLAY state machine
+ * ==========================================================================*/
+'use strict';
+
+/* ==========================================================================
+ * === CONFIG ===============================================================
+ * Every tunable of the procedural animation + gameplay lives here.
+ * ==========================================================================*/
+const CONFIG = {
+  urls: {
+    city:   'https://raw.githubusercontent.com/DF46-afk/RobotsGame/refs/heads/main/city.glb',
+    hangar: 'https://raw.githubusercontent.com/DF46-afk/RobotsGame/refs/heads/main/atlas_hangar_ld.glb',
+    mechA:  'https://raw.githubusercontent.com/DF46-afk/RobotsGame/refs/heads/main/kid_war_robots.glb',
+    mechB:  'https://raw.githubusercontent.com/DF46-afk/RobotsGame/refs/heads/main/kitsune_harpy_rig.glb'
+  },
+  world: {
+    up: [0, 1, 0],
+    groundY: 0.06,            // default floor when heightmap has no sample
+    bounds: [-6.6, 7.6, -0.1, 1.9], // minX maxX minZ maxZ playfield walls
+    fogColor: [0.045, 0.075, 0.115],
+    fogDensity: 0.016,
+    sunDir: [0.42, 0.72, 0.55],
+    sunColor: [1.0, 0.93, 0.82],
+    skyColor: [0.22, 0.36, 0.55],
+    groundColor: [0.30, 0.33, 0.37]
+  },
+  shadow: { size: 1024, range: 26, bias: 0.0022, normalBias: 0.035 },
+  bloom: { threshold: 1.05, knee: 0.55, intensity: 0.72, radius: 1.0, samples: 9 },
+  render: { maxAniso: 4, exposure: 1.18, skinJoints: 64, pixelCap: 2.35e6 },
+  mech: {
+    /* --- procedural torso sway (quaternion offset on spine/root bone) --- */
+    sway:   { freq: 1.55, ampRoll: 0.052, ampPitch: 0.030, velGain: 0.055, idleMul: 0.42 },
+    /* --- step bobbing: easeInOutCubic Y offset tied to move speed ------ */
+    bob:    { freq: 2.55, amp: 0.085, easePow: 3 },
+    /* --- firing recoil: angular impulse + critically damped spring ------ */
+    recoil: { pitchImpulse: 0.115, yawJitter: 0.035, kickback: 0.16,
+              springK: 62, damping: 11.5, maxAngle: 0.30 },
+    /* --- foot grounding / leg IK --------------------------------------- */
+    ik:     { hipDrop: 0.055, toeLift: 0.10, groundSmooth: 12, kneeBias: 0.35 },
+    /* --- locomotion ----------------------------------------------------- */
+    walk:   { speed: 5.6, strafe: 0.78, accel: 14, friction: 11, turnSmooth: 10 },
+    boost:  { mult: 2.05, drain: 30, regen: 16, airMult: 1.35 },
+    jump:   { impulse: 7.4, gravity: 17.5, coyote: 0.12 },
+    stride: { length: 1.55, minFreq: 0.55 }
+  },
+  combat: {
+    fireRate: 5.2,            // rounds per second
+    magSize: 18, reloadTime: 1.9,
+    bulletSpeed: 62, bulletLife: 2.2, bulletRadius: 0.28,
+    damage: 12, headshotMul: 1.0, spreadDeg: 0.9, aimSpreadDeg: 0.15,
+    recoilCamera: 0.55, shake: 0.28,
+    lockRange: 78, lockAngleDeg: 22, lockSlip: 6.5
+  },
+  enemy: {
+    baseCount: 4, perWave: 2, maxAlive: 9, hp: 46, hpPerWave: 11,
+    speed: 3.1, speedPerWave: 0.22, fireRate: 0.85, dmg: 6, burst: 3,
+    engageRange: 46, strafePeriod: 4.2, hitFlash: 0.14, score: 100
+  },
+  player: { hp: 100, radius: 0.95, eyeHeight: 3.05, thirdPerson: 7.2 },
+  audio: { master: 0.8, comp: 0.72 },
+  perf: { maxDrawCalls: 200, dtCap: 0.1 }
+};
+
+/* ==========================================================================
+ * === UTIL ================================================================
+ * ==========================================================================*/
+const $ = (id) => document.getElementById(id);
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const smoothstep = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+/** easeInOutCubic — used by the step-bob curve. */
+const easeInOutCubic = (t) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const rnd = (a = 1, b) => b === undefined ? Math.random() * a : a + Math.random() * (b - a);
+const rndi = (n) => (Math.random() * n) | 0;
+/** Frame-rate independent exponential smoothing factor. */
+const damp = (rate, dt) => 1 - Math.exp(-rate * dt);
+const DEG = Math.PI / 180;
+
+let LOAD_ERRORS = 0;
+/** Log a line into the loading console + devtools. Never throws. */
+function logLine(msg, isErr) {
+  const box = $('logBox');
+  if (box) {
+    const d = document.createElement('div');
+    d.innerHTML = (isErr ? '<b>[warn]</b> ' : '&gt; ') + msg;
+    box.appendChild(d); box.scrollTop = box.scrollHeight;
+  }
+  (isErr ? console.warn : console.log)('[metascape] ' + msg);
+  if (isErr) LOAD_ERRORS++;
+}
+function showFatal(msg) {
+  const e = $('err'); e.style.display = 'block'; e.textContent += msg + '\n';
+  console.error('[metascape][fatal] ' + msg);
+}
+
+/* ==========================================================================
+ * === MATH LIB =============================================================
+ * Flat Float32Array column-major matrices (glTF/WebGL convention).
+ * Nothing here allocates: every function writes into a caller-owned out array.
+ * ==========================================================================*/
+const MAT4_ID = () => new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+const V3 = (x = 0, y = 0, z = 0) => new Float32Array([x, y, z]);
+const Q4 = (x = 0, y = 0, z = 0, w = 1) => new Float32Array([x, y, z, w]);
+
+/** Vec3 ops (out-variants avoid garbage). */
+const vec3 = {
+  set(o, x, y, z) { o[0] = x; o[1] = y; o[2] = z; return o; },
+  copy(o, a) { o[0] = a[0]; o[1] = a[1]; o[2] = a[2]; return o; },
+  add(o, a, b) { o[0] = a[0] + b[0]; o[1] = a[1] + b[1]; o[2] = a[2] + b[2]; return o; },
+  sub(o, a, b) { o[0] = a[0] - b[0]; o[1] = a[1] - b[1]; o[2] = a[2] - b[2]; return o; },
+  scale(o, a, s) { o[0] = a[0] * s; o[1] = a[1] * s; o[2] = a[2] * s; return o; },
+  madd(o, a, b, s) { o[0] = a[0] + b[0] * s; o[1] = a[1] + b[1] * s; o[2] = a[2] + b[2] * s; return o; },
+  dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; },
+  cross(o, a, b) {
+    const ax = a[0], ay = a[1], az = a[2], bx = b[0], by = b[1], bz = b[2];
+    o[0] = ay * bz - az * by; o[1] = az * bx - ax * bz; o[2] = ax * by - ay * bx; return o;
+  },
+  len(a) { return Math.hypot(a[0], a[1], a[2]); },
+  len2(a) { return a[0] * a[0] + a[1] * a[1] + a[2] * a[2]; },
+  norm(o, a) { const l = Math.hypot(a[0], a[1], a[2]) || 1; return vec3.scale(o, a, 1 / l); },
+  lerp(o, a, b, t) {
+    o[0] = a[0] + (b[0] - a[0]) * t; o[1] = a[1] + (b[1] - a[1]) * t; o[2] = a[2] + (b[2] - a[2]) * t; return o;
+  },
+  dist(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]); },
+  dist2(a, b) { const x = a[0] - b[0], y = a[1] - b[1], z = a[2] - b[2]; return x * x + y * y + z * z; },
+  transform(o, m, v) { // mat4 * vec3 (point)
+    const x = v[0], y = v[1], z = v[2];
+    o[0] = m[0] * x + m[4] * y + m[8] * z + m[12];
+    o[1] = m[1] * x + m[5] * y + m[9] * z + m[13];
+    o[2] = m[2] * x + m[6] * y + m[10] * z + m[14];
+    return o;
+  },
+  transformDir(o, m, v) { // mat4 * vec3 (direction, ignores translation)
+    const x = v[0], y = v[1], z = v[2];
+    o[0] = m[0] * x + m[4] * y + m[8] * z;
+    o[1] = m[1] * x + m[5] * y + m[9] * z;
+    o[2] = m[2] * x + m[6] * y + m[10] * z;
+    return o;
+  }
+};
+
+/** Quaternion ops. Layout [x,y,z,w]. */
+const quat = {
+  set(o, x, y, z, w) { o[0] = x; o[1] = y; o[2] = z; o[3] = w; return o; },
+  copy(o, a) { o[0] = a[0]; o[1] = a[1]; o[2] = a[2]; o[3] = a[3]; return o; },
+  ident(o) { return quat.set(o, 0, 0, 0, 1); },
+  norm(o, a) {
+    let l = Math.hypot(a[0], a[1], a[2], a[3]); if (l === 0) return quat.ident(o);
+    l = 1 / l; return quat.set(o, a[0] * l, a[1] * l, a[2] * l, a[3] * l);
+  },
+  /** Hamilton product o = a*b (o may alias neither unless careful). */
+  mul(o, a, b) {
+    const ax = a[0], ay = a[1], az = a[2], aw = a[3];
+    const bx = b[0], by = b[1], bz = b[2], bw = b[3];
+    o[0] = aw * bx + ax * bw + ay * bz - az * by;
+    o[1] = aw * by - ax * bz + ay * bw + az * bx;
+    o[2] = aw * bz + ax * by - ay * bx + az * bw;
+    o[3] = aw * bw - ax * bx - ay * by - az * bz;
+    return o;
+  },
+  conjugate(o, a) { return quat.set(o, -a[0], -a[1], -a[2], a[3]); },
+  fromAxisAngle(o, ax, ay, az, ang) {
+    const h = ang * 0.5, s = Math.sin(h), l = Math.hypot(ax, ay, az) || 1;
+    return quat.set(o, ax / l * s, ay / l * s, az / l * s, Math.cos(h));
+  },
+  fromEulerXYZ(o, rx, ry, rz) {
+    const c1 = Math.cos(rx / 2), c2 = Math.cos(ry / 2), c3 = Math.cos(rz / 2);
+    const s1 = Math.sin(rx / 2), s2 = Math.sin(ry / 2), s3 = Math.sin(rz / 2);
+    return quat.set(o,
+      s1 * c2 * c3 + c1 * s2 * s3, c1 * s2 * c3 - s1 * c2 * s3,
+      c1 * c2 * s3 - s1 * s2 * c3, c1 * c2 * c3 + s1 * s2 * s3);
+  },
+  slerp(o, a, b, t) {
+    let ax = a[0], ay = a[1], az = a[2], aw = a[3];
+    let bx = b[0], by = b[1], bz = b[2], bw = b[3];
+    let cs = ax * bx + ay * by + az * bz + aw * bw;
+    if (cs < 0) { cs = -cs; bx = -bx; by = -by; bz = -bz; bw = -bw; }
+    if (cs > 0.9995) { // near-identical: fall back to normalised lerp
+      o[0] = ax + (bx - ax) * t; o[1] = ay + (by - ay) * t;
+      o[2] = az + (bz - az) * t; o[3] = aw + (bw - aw) * t;
+      return quat.norm(o, o);
+    }
+    const th = Math.acos(clamp(cs, -1, 1)), st = Math.sin(th), s1 = Math.sin((1 - t) * th) / st, s2 = Math.sin(t * th) / st;
+    o[0] = ax * s1 + bx * s2; o[1] = ay * s1 + by * s2; o[2] = az * s1 + bz * s2; o[3] = aw * s1 + bw * s2;
+    return o;
+  },
+  /** rotate vector v by q into out */
+  rotateVec(o, q, v) {
+    const qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+    const vx = v[0], vy = v[1], vz = v[2];
+    const ix = qw * vx + qy * vz - qz * vy, iy = qw * vy + qz * vx - qx * vz;
+    const iz = qw * vz + qx * vy - qy * vx, iw = -qx * vx - qy * vy - qz * vz;
+    o[0] = ix * qw + iw * -qx + iy * -qz - iz * -qy;
+    o[1] = iy * qw + iw * -qy + iz * -qx - ix * -qz;
+    o[2] = iz * qw + iw * -qz + ix * -qy - iy * -qx;
+    return o;
+  }
+};
+
+/** Mat4 ops (column major, length 16). */
+const mat4 = {
+  ident(o) { o[0]=1;o[1]=0;o[2]=0;o[3]=0;o[4]=0;o[5]=1;o[6]=0;o[7]=0;o[8]=0;o[9]=0;o[10]=1;o[11]=0;o[12]=0;o[13]=0;o[14]=0;o[15]=1;return o; },
+  copy(o, a) { for (let i = 0; i < 16; i++) o[i] = a[i]; return o; },
+  /** o = a*b */
+  mul(o, a, b) {
+    const a00=a[0],a01=a[1],a02=a[2],a03=a[3],a10=a[4],a11=a[5],a12=a[6],a13=a[7],
+          a20=a[8],a21=a[9],a22=a[10],a23=a[11],a30=a[12],a31=a[13],a32=a[14],a33=a[15];
+    for (let i = 0; i < 4; i++) {
+      const b0 = b[i*4], b1 = b[i*4+1], b2 = b[i*4+2], b3 = b[i*4+3];
+      o[i*4]   = b0*a00 + b1*a10 + b2*a20 + b3*a30;
+      o[i*4+1] = b0*a01 + b1*a11 + b2*a21 + b3*a31;
+      o[i*4+2] = b0*a02 + b1*a12 + b2*a22 + b3*a32;
+      o[i*4+3] = b0*a03 + b1*a13 + b2*a23 + b3*a33;
+    }
+    return o;
+  },
+  perspective(o, fovy, aspect, near, far) {
+    const f = 1 / Math.tan(fovy / 2); o.fill(0);
+    o[0] = f / aspect; o[5] = f; o[11] = -1;
+    const nf = 1 / (near - far); o[10] = (far + near) * nf; o[14] = 2 * far * near * nf;
+    return o;
+  },
+  ortho(o, l, r, b, t, n, f) {
+    o.fill(0);
+    o[0] = 2 / (r - l); o[5] = 2 / (t - b); o[10] = -2 / (f - n); o[15] = 1;
+    o[12] = -(r + l) / (r - l); o[13] = -(t + b) / (t - b); o[14] = -(f + n) / (f - n);
+    return o;
+  },
+  lookAt(o, eye, center, up) {
+    let zx = eye[0] - center[0], zy = eye[1] - center[1], zz = eye[2] - center[2];
+    let l = Math.hypot(zx, zy, zz); if (l < 1e-8) { zz = 1; l = 1; }
+    zx /= l; zy /= l; zz /= l;
+    let xx = up[1] * zz - up[2] * zy, xy = up[2] * zx - up[0] * zz, xz = up[0] * zy - up[1] * zx;
+    l = Math.hypot(xx, xy, xz); if (l < 1e-8) { xx = 1; xy = 0; xz = 0; l = 1; }
+    xx /= l; xy /= l; xz /= l;
+    const yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+    o[0]=xx; o[1]=yx; o[2]=zx; o[3]=0;
+    o[4]=xy; o[5]=yy; o[6]=zy; o[7]=0;
+    o[8]=xz; o[9]=yz; o[10]=zz; o[11]=0;
+    o[12]=-(xx*eye[0]+xy*eye[1]+xz*eye[2]);
+    o[13]=-(yx*eye[0]+yy*eye[1]+yz*eye[2]);
+    o[14]=-(zx*eye[0]+zy*eye[1]+zz*eye[2]);
+    o[15]=1;
+    return o;
+  },
+  compose(o, pos, quat_, scl) {
+    const x=quat_[0],y=quat_[1],z=quat_[2],w=quat_[3];
+    const x2=x+x, y2=y+y, z2=z+z;
+    const xx=x*x2, xy=x*y2, xz=x*z2, yy=y*y2, yz=y*z2, zz=z*z2, wx=w*x2, wy=w*y2, wz=w*z2;
+    const sx=scl?scl[0]:1, sy=scl?scl[1]:1, sz=scl?scl[2]:1;
+    o[0]=(1-(yy+zz))*sx; o[1]=(xy+wz)*sx; o[2]=(xz-wy)*sx; o[3]=0;
+    o[4]=(xy-wz)*sy; o[5]=(1-(xx+zz))*sy; o[6]=(yz+wx)*sy; o[7]=0;
+    o[8]=(xz+wy)*sz; o[9]=(yz-wx)*sz; o[10]=(1-(xx+yy))*sz; o[11]=0;
+    o[12]=pos[0]; o[13]=pos[1]; o[14]=pos[2]; o[15]=1;
+    return o;
+  },
+  translate(o, a, v) {
+    if (o !== a) mat4.copy(o, a);
+    o[12] += a[0]*v[0] + a[4]*v[1] + a[8]*v[2];
+    o[13] += a[1]*v[0] + a[5]*v[1] + a[9]*v[2];
+    o[14] += a[2]*v[0] + a[6]*v[1] + a[10]*v[2];
+    return o;
+  },
+  scale(o, a, v) {
+    o[0]=a[0]*v[0]; o[1]=a[1]*v[0]; o[2]=a[2]*v[0]; o[3]=a[3]*v[0];
+    o[4]=a[4]*v[1]; o[5]=a[5]*v[1]; o[6]=a[6]*v[1]; o[7]=a[7]*v[1];
+    o[8]=a[8]*v[2]; o[9]=a[9]*v[2]; o[10]=a[10]*v[2]; o[11]=a[11]*v[2];
+    o[12]=a[12]; o[13]=a[13]; o[14]=a[14]; o[15]=a[15];
+    return o;
+  },
+  rotX(o, a, r) { const c=Math.cos(r), s=Math.sin(r);
+    for (let i=0;i<4;i++){const t=a[i+4]; o[i+4]=t*c-a[i+8]*s; o[i+8]=t*s+a[i+8]*c;}
+    if(o!==a)for(let i of [0,1,2,3,12,13,14,15])o[i]=a[i]; return o; },
+  rotY(o, a, r) { const c=Math.cos(r), s=Math.sin(r);
+    for (let i=0;i<4;i++){const t=a[i]; o[i]=a[i+8]*s+t*c; o[i+8]=a[i+8]*c-t*s;}
+    if(o!==a)for(let i of [4,5,6,7,12,13,14,15])o[i]=a[i]; return o; },
+  rotZ(o, a, r) { const c=Math.cos(r), s=Math.sin(r);
+    for (let i=0;i<4;i++){const t=a[i]; o[i]=t*c-a[i+4]*s; o[i+4]=t*s+a[i+4]*c;}
+    if(o!==a)for(let i of [8,9,10,11,12,13,14,15])o[i]=a[i]; return o; },
+  transpose(o, a) {
+    if (o === a) { let t; t=a[1];o[1]=a[4];o[4]=t; t=a[2];o[2]=a[8];o[8]=t; t=a[6];o[6]=a[9];o[9]=t;
+      t=a[3];o[3]=a[12];o[12]=t; t=a[7];o[7]=a[13];o[13]=t; t=a[11];o[11]=a[14];o[14]=t; return o; }
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) o[c*4+r] = a[r*4+c];
+    return o;
+  },
+  /** general 4x4 inverse; returns null-ish (identity) if singular */
+  invert(o, a) {
+    const a00=a[0],a01=a[1],a02=a[2],a03=a[3],a10=a[4],a11=a[5],a12=a[6],a13=a[7],
+          a20=a[8],a21=a[9],a22=a[10],a23=a[11],a30=a[12],a31=a[13],a32=a[14],a33=a[15];
+    const b00=a00*a11-a01*a10, b01=a00*a12-a02*a10, b02=a00*a13-a03*a10, b03=a01*a12-a02*a11,
+          b04=a01*a13-a03*a11, b05=a02*a13-a03*a12, b06=a20*a31-a21*a30, b07=a20*a32-a22*a30,
+          b08=a20*a33-a23*a30, b09=a21*a32-a22*a31, b10=a21*a33-a23*a31, b11=a22*a33-a23*a32;
+    let det = b00*b11-b01*b10+b02*b09+b03*b08-b04*b07+b05*b06;
+    if (!det) { mat4.ident(o); return o; }
+    det = 1 / det;
+    o[0]=(a11*b11-a12*b10+a13*b09)*det; o[1]=(a02*b10-a01*b11-a03*b09)*det;
+    o[2]=(a31*b05-a32*b04+a33*b03)*det; o[3]=(a22*b04-a21*b05-a23*b03)*det;
+    o[4]=(a12*b08-a10*b11-a13*b07)*det; o[5]=(a00*b11-a02*b08+a03*b07)*det;
+    o[6]=(a32*b02-a30*b05-a33*b01)*det; o[7]=(a20*b05-a22*b02+a23*b01)*det;
+    o[8]=(a10*b10-a11*b08+a13*b06)*det; o[9]=(a01*b08-a00*b10-a03*b06)*det;
+    o[10]=(a30*b04-a31*b02+a33*b00)*det; o[11]=(a21*b02-a20*b04-a23*b00)*det;
+    o[12]=(a11*b07-a10*b09-a12*b06)*det; o[13]=(a00*b09-a01*b07+a02*b06)*det;
+    o[14]=(a31*b01-a30*b03-a32*b00)*det; o[15]=(a20*b03-a21*b01+a22*b00)*det;
+    return o;
+  },
+  /** extract rotation-only quaternion from upper 3x3 (orthonormalised) */
+  toQuat(o, m) {
+    const m00=m[0],m01=m[1],m02=m[2],m10=m[4],m11=m[5],m12=m[6],m20=m[8],m21=m[9],m22=m[10];
+    const tr = m00 + m11 + m22;
+    let s, x, y, z, w;
+    if (tr > 0) { s = Math.sqrt(tr + 1) * 2; w = 0.25 * s; x = (m21 - m12) / s; y = (m02 - m20) / s; z = (m10 - m01) / s; }
+    else if (m00 > m11 && m00 > m22) { s = Math.sqrt(1 + m00 - m11 - m22) * 2; w = (m21 - m12) / s; x = 0.25 * s; y = (m01 + m10) / s; z = (m02 + m20) / s; }
+    else if (m11 > m22) { s = Math.sqrt(1 + m11 - m00 - m22) * 2; w = (m02 - m20) / s; x = (m01 + m10) / s; y = 0.25 * s; z = (m12 + m21) / s; }
+    else { s = Math.sqrt(1 + m22 - m00 - m11) * 2; w = (m10 - m01) / s; x = (m02 + m20) / s; y = (m12 + m21) / s; z = 0.25 * s; }
+    return quat.norm(o, quat.set(o, x, y, z, w));
+  }
+};
+
+/** Scratch pool — reused every frame so the loop never allocates. */
+const _s = {
+  m1: MAT4_ID(), m2: MAT4_ID(), m3: MAT4_ID(), m4: MAT4_ID(), mTmp: MAT4_ID(),
+  v1: V3(), v2: V3(), v3: V3(), v4: V3(), v5: V3(),
+  q1: Q4(), q2: Q4(), q3: Q4()
+};
+/* ==========================================================================
+ * === GLB PARSER ===========================================================
+ * Hand written binary glTF (GLB 2.0) reader. This is the most fragile part of
+ * the engine, so every step is defensive: bounds checks everywhere, and any
+ * failure degrades to a coloured box instead of throwing into the frame loop.
+ *
+ * GLB layout (all little endian):
+ *   +----------------------------------------------------------+
+ *   | header : uint32 magic 'glTF' | uint32 version | uint32 len|
+ *   +----------------------------------------------------------+
+ *   | chunk0 : uint32 len | uint32 type(='JSON') | payload     |
+ *   | chunk1 : uint32 len | uint32 type(='BIN\0')| payload     |
+ *   +----------------------------------------------------------+
+ * The JSON chunk is a full glTF document: buffers / bufferViews / accessors /
+ * meshes / materials / nodes / skins / images / textures / samplers.
+ *
+ * Accessor model (important!):
+ *   accessor -> bufferView{byteOffset,byteStride,target} -> BIN chunk (+ the
+ *   accessor's own byteOffset). componentType decides element size & type:
+ *       5120 i8 | 5121 u8 | 5122 i16 | 5123 u16 | 5125 u32 | 5126 f32
+ *   NORMALIZED u8/u16 attributes (weights, joints as u8) must be rescaled to
+ *   [0,1] / [0,65535] — we do that manually because WebGL2 vertex attrib
+ *   "normalized" flags are per attribute and easier to control on the CPU.
+ *   We always DE-INTERLEAVE into tightly packed typed arrays so VAO setup can
+ *   use stride = 0 (tightly packed), which keeps the shader/attrib code simple.
+ * ==========================================================================*/
+
+/** Component metadata table: [bytesPerElement, TypedArrayCtor, glEnum]. */
+const GLB_COMP = {
+  5120: [1, Int8Array,    0x1400], // BYTE
+  5121: [1, Uint8Array,   0x1401], // UNSIGNED_BYTE
+  5122: [2, Int16Array,   0x1402], // SHORT
+  5123: [2, Uint16Array,  0x1403], // UNSIGNED_SHORT
+  5125: [4, Uint32Array,  0x1405], // UNSIGNED_INT
+  5126: [4, Float32Array, 0x1406]  // FLOAT
+};
+const GLB_NCOMP = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+const GL_TARGET_ARRAY_BUFFER = 0x8892, GL_TARGET_ELEMENT_ARRAY_BUFFER = 0x8893;
+
+/**
+ * Split a GLB ArrayBuffer into its JSON document + binary blob.
+ * @param {ArrayBuffer} buf raw file bytes
+ * @returns {{json:Object, bin:ArrayBuffer}}
+ * @throws if magic/version/chunks are malformed
+ */
+function glbSplit(buf) {
+  const dv = new DataView(buf);
+  if (buf.byteLength < 12) throw new Error('GLB too small: ' + buf.byteLength + ' bytes');
+  const magic = dv.getUint32(0, true), version = dv.getUint32(4, true), total = dv.getUint32(8, true);
+  if (magic !== 0x46546C67 /* 'glTF' */) throw new Error('bad GLB magic 0x' + magic.toString(16));
+  if (version !== 2) logLine('glb version ' + version + ' (expected 2) — attempting parse', true);
+  let off = 12, jsonTxt = null, bin = null;
+  // Walk chunks until the declared total length; tolerate trailing padding.
+  while (off + 8 <= Math.min(total, buf.byteLength)) {
+    const len = dv.getUint32(off, true), type = dv.getUint32(off + 4, true);
+    const start = off + 8, end = start + len;
+    if (len < 0 || end > buf.byteLength) throw new Error('chunk overruns file at offset ' + off);
+    if (type === 0x4E4F534A /* 'JSON' */) {
+      jsonTxt = new TextDecoder('utf-8').decode(new Uint8Array(buf, start, len));
+    } else if (type === 0x004E4942 /* 'BIN\0' */) {
+      bin = buf.slice(start, end);            // copy: keeps alignment independent
+    }
+    off = end + ((4 - (end % 4)) % 4);        // chunks are 4-byte aligned
+  }
+  if (!jsonTxt) throw new Error('no JSON chunk found');
+  if (!bin) bin = new ArrayBuffer(0);         // some GLBs are JSON-only
+  return { json: JSON.parse(jsonTxt), bin };
+}
+
+/**
+ * Read an accessor into a tightly packed Float32Array (de-interleaved,
+ * normalized where required by the spec). Indices keep their integer type.
+ * @returns {{data:Float32Array|Int32Array|Uint16Array, comps:number, count:number, intType?:number}}
+ */
+function glbReadAccessor(gltf, bin, accIndex, forceFloat = true) {
+  const A = gltf.accessors && gltf.accessors[accIndex];
+  if (!A) throw new Error('missing accessor ' + accIndex);
+  const comps = GLB_NCOMP[A.type];
+  if (!comps) throw new Error('unsupported accessor type ' + A.type);
+  const meta = GLB_COMP[A.componentType];
+  if (!meta) throw new Error('unsupported componentType ' + A.componentType);
+  const [elemSize, Ctor, glType] = meta;
+  const count = A.count;
+  const out = new Float32Array(count * comps);
+  const bv = (A.bufferView !== undefined) ? gltf.bufferViews[A.bufferView] : null;
+  if (bv) {
+    const stride = bv.byteStride || (comps * elemSize);
+    const base = (bv.byteOffset || 0) + (A.byteOffset || 0);
+    if (base < 0 || base + (count - 1) * stride + comps * elemSize > bin.byteLength)
+      throw new Error('accessor ' + accIndex + ' exceeds BIN chunk');
+    // Build one typed view over the whole region then de-interleave elementwise.
+    const raw = new Ctor(bin, base, stride === comps * elemSize ? count * comps : Math.floor((bin.byteLength - base) / stride) * (stride / elemSize));
+    const src = new Ctor(bin, base, count * comps + (stride - comps * elemSize) * (count - 1));
+    const elemsPerRow = stride / elemSize;
+    const normDiv = (A.normalized === true || (!forceFloat && false)) ? (A.componentType === 5121 ? 255 : A.componentType === 5123 ? 65535 : 1) : 1;
+    for (let i = 0; i < count; i++) {
+      const rb = i * elemsPerRow;
+      for (let c = 0; c < comps; c++) out[i * comps + c] = src[rb + c] / normDiv;
+    }
+    void raw;
+  } else {
+    // Sparse/inline accessors without bufferView: values live in accessor.sparse or are zero.
+    if (A.sparse) {
+      const sp = A.sparse;
+      const ic = glbReadAccessor(gltf, bin, sp.values.bufferView !== undefined ? sp.values.byteOffset && sp.count : sp.count, true);
+      void ic; // sparse fallback: leave zeros (extremely rare in these assets)
+    }
+  }
+  if (!forceFloat) {
+    const ints = new Int32Array(count * comps);
+    for (let i = 0; i < ints.length; i++) ints[i] = Math.round(out[i]);
+    return { data: ints, comps, count, intType: A.componentType };
+  }
+  return { data: out, comps, count, intType: A.componentType, glType };
+}
+
+/** Read index accessor preserving GPU-friendly types (u16 preferred). */
+function glbReadIndices(gltf, bin, accIndex) {
+  const A = gltf.accessors[accIndex];
+  if (!A) throw new Error('missing index accessor ' + accIndex);
+  const comps = 1, meta = GLB_COMP[A.componentType];
+  if (!meta) throw new Error('bad index componentType ' + A.componentType);
+  const [, Ctor] = meta;
+  const bv = gltf.bufferViews[A.bufferView];
+  const base = (bv.byteOffset || 0) + (A.byteOffset || 0);
+  if (base + A.count * meta[0] > bin.byteLength) throw new Error('index accessor exceeds BIN');
+  const raw = new Ctor(bin, base, A.count);
+  let maxI = 0;
+  for (let i = 0; i < A.count; i++) if (raw[i] > maxI) maxI = raw[i];
+  const arr = (maxI <= 65535) ? new Uint16Array(A.count) : new Uint32Array(A.count);
+  arr.set(raw);
+  return { data: arr, count: A.count, glType: (arr instanceof Uint16Array) ? 0x1403 : 0x1405 };
+}
+
+/**
+ * Create a WebGL2 texture from embedded image bytes (PNG/JPEG via browser
+ * decode) or from a base64 data URI. Returns null on failure (never throws).
+ */
+async function glbTexture(gl, gltf, bin, texIndex) {
+  try {
+    const t = gltf.textures[texIndex]; if (!t) return null;
+    const img = gltf.images[t.source]; if (!img) return null;
+    let blobUrl = null, bitmap = null;
+    if (img.bufferView !== undefined) {
+      const bv = gltf.bufferViews[img.bufferView];
+      const off = bv.byteOffset || 0, len = bv.byteLength;
+      const mime = img.mimeType || 'image/png';
+      const bytes = new Uint8Array(bin, off, len);
+      blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
+    } else if (typeof img.uri === 'string' && img.uri.startsWith('data:')) {
+      blobUrl = img.uri;
+    } else if (typeof img.uri === 'string') {
+      const r = await fetch(img.uri); blobUrl = URL.createObjectURL(await r.blob());
+    } else return null;
+    if (typeof createImageBitmap === 'function') {
+      const resp = await fetch(blobUrl);
+      try { bitmap = await createImageBitmap(resp.body ? await resp.blob() : resp); } catch (e) { bitmap = null; }
+    }
+    let el = null;
+    if (!bitmap) {
+      el = new Image(); el.decoding = 'async';
+      await new Promise((res, rej) => { el.onload = res; el.onerror = () => rej(new Error('img decode')); el.src = blobUrl; });
+    }
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    const src = bitmap || el;
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, src);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    const smp = gltf.samplers ? gltf.samplers[(gltf.textures[texIndex].sampler ?? 0)] : null;
+    const wrap = smp ? smp.wrapS : 10497;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap === 33071 ? gl.REPEAT : gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, (smp ? smp.wrapT : 10497) === 33071 ? gl.REPEAT : gl.CLAMP_TO_EDGE);
+    const linear = !smp || smp.magFilter !== 9728;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, linear ? gl.LINEAR : gl.NEAREST);
+    if (ANISO) gl.texParameterf(gl.TEXTURE_2D, ANISO, CONFIG.render.maxAniso);
+    if (blobUrl && blobUrl.startsWith('blob:')) URL.revokeObjectURL(blobUrl);
+    if (bitmap && bitmap.close) bitmap.close();
+    return tex;
+  } catch (e) {
+    logLine('texture ' + texIndex + ' failed: ' + e.message, true);
+    return null;
+  }
+}
+let ANISO = 0; // set once context exists
+
+/**
+ * Parse a GLB into GPU-ready structures.
+ * @returns {Promise<Object>} asset {prims,nodes,skins,bounds,textures,ok,label}
+ */
+async function parseGLB(gl, arrayBuffer, label) {
+  const { json: g, bin } = glbSplit(arrayBuffer);
+  const asset = {
+    label, gltf: g, bin, prims: [], nodes: [], skins: [], textures: new Map(),
+    bounds: { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] },
+    ok: true
+  };
+  /* ---- shared white texture used whenever a material has no map ---------- */
+  asset.white = (() => {
+    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    return t;
+  })();
+  /* ---- materials: resolve PBR factors + textures ------------------------- */
+  const mats = (g.materials || []).map((m, mi) => {
+    const pbr = m.pbrMetallicRoughness || {};
+    const bf = pbr.baseColorFactor || [1, 1, 1, 1];
+    const em = m.emissiveFactor || [0, 0, 0];
+    return {
+      idx: mi, name: m.name || ('mat' + mi),
+      base: [bf[0], bf[1], bf[2]], alpha: bf[3],
+      metallic: pbr.metallicFactor !== undefined ? pbr.metallicFactor : 1,
+      roughness: pbr.roughnessFactor !== undefined ? pbr.roughnessFactor : 1,
+      emissive: em, doubleSided: !!m.doubleSided, alphaMode: m.alphaMode || 'OPAQUE',
+      baseTex: pbr.baseColorTexture ? pbr.baseColorTexture.index : -1,
+      mrTex: pbr.metallicRoughnessTexture ? pbr.metallicRoughnessTexture.index : -1,
+      occTex: m.occlusionTexture ? m.occlusionTexture.index : -1,
+      emisTex: m.emissiveTexture ? m.emissiveTexture.index : -1
+    };
+  });
+  asset.materials = mats;
+  /* ---- meshes -> primitives (one draw item each) ------------------------- */
+  const meshList = g.meshes || [];
+  for (let mi = 0; mi < meshList.length; mi++) {
+    for (let pi = 0; pi < meshList[mi].primitives.length; pi++) {
+      const p = meshList[mi].primitives[pi];
+      if (p.mode !== undefined && p.mode !== 4) continue;   // TRIANGLES only
+      const attrs = p.attributes || {};
+      if (!attrs.POSITION) continue;                        // nothing drawable
+      try {
+        const prim = {
+          mesh: mi, prim: pi, mat: (p.material !== undefined ? mats[p.material] : mats[0]) || null,
+          mode: 4, vbo: {}, ibo: null, count: 0, indexed: false, skinned: false,
+          bboxMin: null, bboxMax: null, name: (meshList[mi].name || ('mesh' + mi))
+        };
+        const pos = glbReadAccessor(g, bin, attrs.POSITION);
+        prim.vbo.POSITION = pos.data; prim.count = pos.count;
+        prim.bboxMin = [pos.data[0], pos.data[1], pos.data[2]];
+        prim.bboxMax = [pos.data[0], pos.data[1], pos.data[2]];
+        for (let i = 0; i < pos.count; i++) {
+          for (let c = 0; c < 3; c++) {
+            const v = pos.data[i * 3 + c];
+            if (v < prim.bboxMin[c]) prim.bboxMin[c] = v;
+            if (v > prim.bboxMax[c]) prim.bboxMax[c] = v;
+          }
+        }
+        if (attrs.NORMAL) prim.vbo.NORMAL = glbReadAccessor(g, bin, attrs.NORMAL).data;
+        if (attrs.TEXCOORD_0) prim.vbo.TEXCOORD_0 = glbReadAccessor(g, bin, attrs.TEXCOORD_0).data;
+        if (attrs.COLOR_0) prim.vbo.COLOR_0 = glbReadAccessor(g, bin, attrs.COLOR_0).data;
+        if (attrs.JOINTS_0 && attrs.WEIGHTS_0) {
+          // joints: keep as float (converted to Uint16 below); weights already normalized by accessor
+          const j = glbReadAccessor(g, bin, attrs.JOINTS_0);
+          const w = glbReadAccessor(g, bin, attrs.WEIGHTS_0);
+          const jc = new Uint16Array(j.count * j.comps);
+          for (let i = 0; i < jc.length; i++) jc[i] = Math.min(CONFIG.render.skinJoints - 1, Math.round(j.data[i]));
+          const wc = new Float32Array(w.count * 4);
+          for (let i = 0; i < w.count; i++) {
+            let s = 0; for (let c = 0; c < Math.min(4, w.comps); c++) s += w.data[i * w.comps + c];
+            for (let c = 0; c < 4; c++) {
+              const v = c < Math.min(4, w.comps) ? w.data[i * w.comps + c] : 0;
+              wc[i * 4 + c] = s > 0 ? v / s : (c === 0 ? 1 : 0);
+            }
+          }
+          prim.vbo.JOINTS_0 = jc; prim.vbo.WEIGHTS_0 = wc; prim.skinned = true;
+        }
+        if (p.indices !== undefined) {
+          const idx = glbReadIndices(g, bin, p.indices);
+          prim.iboData = idx.data; prim.iboType = idx.glType; prim.indexed = true;
+        }
+        // upload immediately: keeps peak memory low and simplifies lifetime mgmt
+        prim.vboPos = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, prim.vboPos); gl.bufferData(gl.ARRAY_BUFFER, prim.vbo.POSITION, gl.STATIC_DRAW);
+        delete prim.vbo.POSITION;
+        prim.gpu = {};
+        for (const key of ['NORMAL', 'TEXCOORD_0', 'COLOR_0', 'JOINTS_0', 'WEIGHTS_0']) {
+          if (!prim.vbo[key]) continue;
+          const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+          gl.bufferData(gl.ARRAY_BUFFER, prim.vbo[key], gl.STATIC_DRAW);
+          prim.gpu[key] = b; delete prim.vbo[key];
+        }
+        if (prim.indexed) {
+          prim.ibo = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, prim.ibo);
+          gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, prim.iboData, gl.STATIC_DRAW);
+          prim.iboCount = prim.iboData.length; delete prim.iboData;
+        }
+        asset.prims.push(prim);
+      } catch (e) {
+        logLine(label + ' primitive ' + mi + '.' + pi + ' skipped: ' + e.message, true);
+      }
+    }
+  }
+  /* ---- node graph -------------------------------------------------------- */
+  const nodes = g.nodes || [];
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    asset.nodes.push({
+      index: i, name: n.name || ('node' + i), children: n.children || [], mesh: (n.mesh !== undefined ? n.mesh : -1),
+      skin: (n.skin !== undefined ? n.skin : -1),
+      T: new Float32Array(n.translation || [0, 0, 0]),
+      R: new Float32Array(n.rotation || [0, 0, 0, 1]),
+      S: new Float32Array(n.scale || [1, 1, 1]),
+      M: n.matrix ? new Float32Array(n.matrix) : null,
+      local: MAT4_ID(), world: MAT4_ID(), worldN: MAT4_ID()
+    });
+  }
+  /* ---- skins: joint list + inverse bind matrices ------------------------- */
+  const skins = g.skins || [];
+  for (let si = 0; si < skins.length; si++) {
+    const s = skins[si];
+    let ibm = null;
+    if (s.inverseBindMatrices !== undefined) {
+      try { ibm = glbReadAccessor(g, bin, s.inverseBindMatrices).data; } catch (e) { logLine('IBM read failed: ' + e.message, true); }
+    }
+    const nj = s.joints.length;
+    const ibmArr = new Float32Array(nj * 16);
+    if (ibm && ibm.length >= nj * 16) ibmArr.set(ibm.subarray(0, nj * 16));
+    else for (let j = 0; j < nj; j++) mat4.ident(ibmArr.subarray(j * 16, j * 16 + 16));
+    asset.skins.push({
+      index: si, joints: s.joints.slice(), ibm: ibmArr, skeleton: s.skeleton !== undefined ? s.skeleton : -1,
+      jointMat: new Float32Array(Math.min(nj, CONFIG.render.skinJoints) * 16),
+      gpuBuf: gl.createBuffer(), count: Math.min(nj, CONFIG.render.skinJoints)
+    });
+  }
+  /* ---- global (bind/rest) transforms + aggregate bounds ------------------ */
+  computeNodeWorlds(asset, false);
+  for (const nd of asset.nodes) {
+    if (nd.mesh < 0) continue;
+    for (const pr of asset.prims) {
+      if (pr.mesh !== nd.mesh) continue;
+      if (pr.skinned) continue;               // skinned geometry is authored in bind space
+      expandBounds(asset.bounds, nd.world, pr.bboxMin, pr.bboxMax);
+    }
+  }
+  /* ---- textures (lazy, deduped) ------------------------------------------ */
+  asset.texFor = async (idx) => {
+    if (idx < 0) return null;
+    if (asset.textures.has(idx)) return asset.textures.get(idx);
+    const t = await glbTexture(gl, g, bin, idx);
+    asset.textures.set(idx, t);
+    return t;
+  };
+  asset.dispose = () => {
+    for (const p of asset.prims) {
+      if (p.vboPos) gl.deleteBuffer(p.vboPos);
+      if (p.ibo) gl.deleteBuffer(p.ibo);
+      for (const k in p.gpu) gl.deleteBuffer(p.gpu[k]);
+    }
+    for (const t of asset.textures.values()) if (t) gl.deleteTexture(t);
+    if (asset.white) gl.deleteTexture(asset.white);
+    for (const s of asset.skins) gl.deleteBuffer(s.gpuBuf);
+    asset.prims.length = 0;
+  };
+  if (!asset.prims.length) { asset.ok = false; logLine(label + ': no drawable primitives', true); }
+  return asset;
+}
+
+/** Multiply node TRS/M into local, then DFS parent*child into world. */
+function computeNodeWorlds(asset, animated) {
+  const nodes = asset.nodes;
+  const childOf = new Set();
+  for (const n of nodes) for (const c of n.children) childOf.add(c);
+  for (const n of nodes) {
+    if (n.M) mat4.copy(n.local, n.M);
+    else mat4.compose(n.local, n.T, n.R, n.S);
+  }
+  const stack = [];
+  for (let i = 0; i < nodes.length; i++) if (!childOf.has(i)) { stack.push(i); mat4.copy(nodes[i].world, nodes[i].local); }
+  while (stack.length) {
+    const i = stack.pop(), nd = nodes[i];
+    for (const c of nd.children) {
+      if (c < 0 || c >= nodes.length) continue;
+      mat4.mul(nodes[c].world, nd.world, nodes[c].local);
+      stack.push(c);
+    }
+  }
+  if (animated) {
+    for (const n of nodes) {
+      mat4.invert(_s.mTmp, n.world); mat4.transpose(n.worldN, _s.mTmp);
+    }
+  }
+}
+
+/** AABB transform helper (axis aligned box -> world AABB). */
+function expandBounds(out, m, mn, mx) {
+  for (let c = 0; c < 3; c++) {
+    const a = Math.abs(m[c]) * mn[0], b = Math.abs(m[4 + c]) * mn[1], d = Math.abs(m[8 + c]) * mn[2];
+    const lo = Math.min(a, b, d), hi = Math.max(a, b, d);
+    const tx = m[12] * mn[c];
+    void tx;
+    const c0 = m[c] * mn[0] + m[4 + c] * mn[1] + m[8 + c] * mn[2] + m[12 + c];
+    const c1 = m[c] * mx[0] + m[4 + c] * mn[1] + m[8 + c] * mn[2] + m[12 + c];
+    const c2 = m[c] * mn[0] + m[4 + c] * mx[1] + m[8 + c] * mn[2] + m[12 + c];
+    const c3 = m[c] * mx[0] + m[4 + c] * mx[1] + m[8 + c] * mx[2] + m[12 + c];
+    out.min[c] = Math.min(out.min[c], Math.min(Math.min(c0, c1), Math.min(c2, c3)));
+    out.max[c] = Math.max(out.max[c], Math.max(Math.max(c0, c1), Math.max(c2, c3)));
+    void lo; void hi; void d;
+  }
+}
+
+/* ==========================================================================
+ * === SHADERS ==============================================================
+ * GLSL 300 es, embedded as strings.
+ * ==========================================================================*/
+const VS_MESH = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+layout(location=2) in vec2 aUV;
+layout(location=3) in vec4 aJoints;
+layout(location=4) in vec4 aWeights;
+uniform mat4 uModel, uViewProj, uLightVP;
+uniform mat3 uNormalMat;
+uniform bool uSkinned;
+uniform sampler2D uJointTex;   // packed skin matrices (RGBA32F, 4 texels/matrix)
+uniform int uJointTexW;
+out vec3 vWorld; out vec3 vNormal; out vec2 vUV;
+mat4 skinMatrix(float idx){
+  int b = int(idx) * 4;
+  int x = b % uJointTexW; int y = b / uJointTexW;
+  mat4 m;
+  for(int i=0;i<4;i++){
+    ivec2 tc = ivec2(x + i, y);
+    m[i] = texelFetch(uJointTex, tc, 0);
+  }
+  return m;
+}
+void main(){
+  vec3 p = aPos; vec3 n = aNormal;
+  if(uSkinned){
+    mat4 sm = skinMatrix(aJoints.x)*aWeights.x + skinMatrix(aJoints.y)*aWeights.y
+            + skinMatrix(aJoints.z)*aWeights.z + skinMatrix(aJoints.w)*aWeights.w;
+    p = (sm * vec4(aPos,1.0)).xyz;
+    n = normalize(mat3(sm) * n);
+  }
+  vec4 wp = uModel * vec4(p,1.0);
+  vWorld = wp.xyz;
+  vNormal = normalize(uNormalMat * n);
+  vUV = aUV;
+  gl_Position = uViewProj * wp;
+}`;
+
+const FS_MESH = `#version 300 es
+precision highp float;
+in vec3 vWorld; in vec3 vNormal; in vec2 vUV;
+out vec4 fragColor;
+uniform vec3 uCamPos, uBaseColor, uEmissive, uLightDir, uLightColor, uSkyColor, uGroundColor, uFogColor;
+uniform float uMetallic, uRoughness, uAlpha, uEmissiveBoost, uFogDensity, uTime, uHitFlash;
+uniform int uUseBaseTex, uUnlit, uReceiveShadow;
+uniform highp sampler2DShadow uShadowMap;   // hardware PCF depth texture
+uniform mat4 uLightVP;
+uniform sampler2D uPointColors;   // RGBA32F texture: xyz=color, w=intensity, up to 8 lights
+uniform int uNumPoints;
+uniform vec3 uPointPos[8];
+uniform float uShadowBias;
+uniform int uUseLightmap;
+uniform sampler2D uLightmap;      // R = baked AO toward sun, G = dynamic scorch heat
+uniform vec4 uLMRect;             // world-space origin + cell size (minX, minZ, dx, dz)
+const float PI = 3.14159265359;
+float D_GGX(float nh, float r){ float a = r*r; float d = nh*nh*(a*a-1.0)+1.0; return a*a/(PI*d*d+1e-7); }
+float V_SmithGGX(float nv,float nl,float r){ float a=r*r; float gv=nv*sqrt(nl*nl*(1.0-a*a)+a*a); float gl=nl*sqrt(nv*nv*(1.0-a*a)+a*a); return 0.5/max(gv+gl,1e-6); }
+vec3 F_Schlick(vec3 f0,float u){ return f0 + (1.0-f0)*pow(1.0-u,5.0); }
+vec3 fresnelRoughness(float ct, vec3 f0, float rough){
+  return f0 + (max(vec3(1.0-rough),f0)-f0)*pow(clamp(1.0-ct,0.0,1.0),5.0);
+}
+/** Shadow lookup: world-space offset along the normal kills acne on thin
+ *  geometry, constant depth bias handles the rest, hardware PCF smooths edges. */
+float shadowFactor(vec3 wpos, vec3 n, vec3 lightDir){
+  if(uReceiveShadow==0) return 1.0;
+  vec4 ls = uLightVP * vec4(wpos + n*uShadowBias*2.0 + lightDir*uShadowBias, 1.0);
+  vec3 sc = ls.xyz/ls.w*0.5+0.5;
+  if(sc.z>1.0||sc.x<0.0||sc.x>1.0||sc.y<0.0||sc.y>1.0) return 1.0;
+  return texture(uShadowMap, sc.xy);
+}
+vec3 lighting(vec3 albedo, float metal, float rough, vec3 n, vec3 v){
+  vec3 f0 = mix(vec3(0.04), albedo, metal);
+  vec3 diffCol = albedo*(1.0-metal);
+  vec3 Ldir = normalize(uLightDir);          // direction TOWARD the sun
+  vec3 L = -Ldir;                            // light travel direction
+  vec3 H = normalize(L+v);
+  float nh=max(dot(n,H),0.0), nl=max(dot(n,L),0.0), nv=max(dot(n,v),1e-4);
+  float sh = shadowFactor(vWorld, n, Ldir);
+  vec3 spec = F_Schlick(f0,max(dot(H,v),0.0))*D_GGX(nh,rough)*V_SmithGGX(nv,nl,rough)*nl*uLightColor*sh;
+  vec3 diff = diffCol*nl*uLightColor*sh*0.85;
+  // hemisphere ambient IBL approximation
+  float hemi = dot(n, vec3(0.0,1.0,0.0))*0.5+0.5;
+  vec3 amb = mix(uGroundColor, uSkyColor, hemi)*mix(vec3(1.0),albedo,metal)*0.55;
+  vec3 envSpec = mix(uGroundColor,uSkyColor,hemi)*fresnelRoughness(nv,f0,rough)*(1.0-rough)*0.6;
+  // point lights (tracer bolts + impacts)
+  vec3 pts = vec3(0.0);
+  for(int i=0;i<8;i++){
+    if(i>=uNumPoints) break;
+    vec3 dl = uPointPos[i]-vWorld; float dist=length(dl);
+    vec3 col = texture(uPointColors, vec2((float(i)+0.5)/8.0,0.5)).rgb;
+    float inten = texture(uPointColors, vec2((float(i)+0.5)/8.0,0.5)).a;
+    float att = inten/(1.0+dist*dist*0.09);
+    vec3 pl = dl/max(dist,1e-4);
+    vec3 ph = normalize(pl+v);
+    float pnl = max(dot(n,pl),0.0);
+    pts += (diffCol*pnl + f0*D_GGX(max(dot(n,ph),0.0),rough)*pnl)*col*att;
+  }
+  return diff + spec + amb + envSpec + pts;
+}
+void main(){
+  vec3 albedo = uBaseColor;
+  float metal = uMetallic, rough = clamp(uRoughness,0.04,1.0);
+  if(uUseBaseTex==1){
+    vec4 t = texture(uBaseTexS, vUV);
+    albedo *= t.rgb;
+    metal *= 1.0;                 // single-texture assets: keep factor metallic
+    rough = clamp(rough*t.a*1.2,0.04,1.0);
+  }
+  if(uUnlit==1){
+    vec3 e = albedo*uEmissiveBoost;
+    fragColor = vec4(e, uAlpha);
+    return;
+  }
+  vec3 n = normalize(vNormal);
+  if(!gl_FrontFacing) n = -n;
+  vec3 v = normalize(uCamPos - vWorld);
+  vec3 col = lighting(albedo, metal, rough, n, v);
+  if(uUseLightmap==1){
+    // planar lightmap: baked sun-facing AO (R) + dynamic scorch heat (G)
+    vec2 luv = (vWorld.xz - uLMRect.xy)/uLMRect.zw;
+    vec4 lm = texture(uLightmap, clamp(luv,0.001,0.999));
+    float upMix = smoothstep(0.55,0.9,abs(n.y));      // only affects near-flat ground
+    col = mix(col, col*lm.r, upMix);
+    col += upMix*lm.g*(vec3(0.06,0.015,0.008) + vec3(0.5,0.18,0.05)*pow(lm.g,3.0)*0.25);
+  }
+  col += uEmissive*uEmissiveBoost;
+  col = mix(col, vec3(1.0,0.35,0.35), uHitFlash);
+  // distance fog
+  float d = length(uCamPos - vWorld);
+  float fog = 1.0-exp(-d*uFogDensity);
+  col = mix(col, uFogColor, clamp(fog,0.0,1.0));
+  fragColor = vec4(col, uAlpha);
+}`;
+
+const VS_DEPTH = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=3) in vec4 aJoints;
+layout(location=4) in vec4 aWeights;
+uniform mat4 uModel, uLightVP;
+uniform bool uSkinned;
+uniform sampler2D uJointTex; uniform int uJointTexW;
+mat4 skinMatrix(float idx){
+  int b = int(idx)*4; int x=b%uJointTexW; int y=b/uJointTexW;
+  mat4 m; for(int i=0;i<4;i++) m[i]=texelFetch(uJointTex, ivec2(x+i,y),0);
+  return m;
+}
+void main(){
+  vec3 p=aPos;
+  if(uSkinned){
+    mat4 sm = skinMatrix(aJoints.x)*aWeights.x+skinMatrix(aJoints.y)*aWeights.y
+            + skinMatrix(aJoints.z)*aWeights.z+skinMatrix(aJoints.w)*aWeights.w;
+    p=(sm*vec4(aPos,1.0)).xyz;
+  }
+  gl_Position = uLightVP * (uModel*vec4(p,1.0));
+}`;
+
+const FS_DEPTH = `#version 300 es
+precision highp float;
+void main(){}`;
+
+const VS_QUAD = `#version 300 es
+precision highp float;
+out vec2 vUV;
+void main(){
+  vec2 p = vec2(float((gl_VertexID<<1)&2), float(gl_VertexID&2));
+  vUV = p; gl_Position = vec4(p*2.0-1.0, 0.0, 1.0);
+}`;
+
+const FS_BRIGHT = `#version 300 es
+precision highp float;
+in vec2 vUV; out vec4 o;
+uniform sampler2D uSrc; uniform float uThresh, uKnee;
+void main(){
+  vec3 c = texture(uSrc,vUV).rgb;
+  float br = max(c.r,max(c.g,c.b));
+  float soft = clamp(br-uThresh+uKnee,0.0,2.0*uKnee);
+  soft = soft*soft/(4.0*uKnee+1e-5);
+  float w = max(soft, br-uThresh)/max(br,1e-5);
+  o = vec4(c*w,1.0);
+}`;
+
+const FS_BLUR = `#version 300 es
+precision highp float;
+in vec2 vUV; out vec4 o;
+uniform sampler2D uSrc; uniform vec2 uDir; uniform int uSamples;
+void main(){
+  vec3 sum = texture(uSrc,vUV).rgb*0.227027;
+  float w[4] = float[4](0.1945946,0.1216216,0.054054,0.016216);
+  for(int i=1;i<4;i++){
+    vec2 off = uDir*float(i);
+    sum += texture(uSrc,vUV+off).rgb*w[i-1];
+    sum += texture(uSrc,vUV-off).rgb*w[i-1];
+  }
+  o = vec4(sum,1.0);
+}`;
+
+const FS_COMPOSITE = `#version 300 es
+precision highp float;
+in vec2 vUV; out vec4 o;
+uniform sampler2D uScene, uBloom;
+uniform float uExposure, uBloomInt, uTime, uVignette, uAberr, uDamage, uScan;
+vec3 aces(vec3 x){
+  const float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14;
+  return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0);
+}
+void main(){
+  vec2 uv = vUV;
+  vec2 dir = uv-0.5;
+  float r2 = dot(dir,dir);
+  vec2 ab = dir*r2*uAberr*0.02;
+  vec3 col;
+  col.r = texture(uScene,uv+ab).r;
+  col.g = texture(uScene,uv).g;
+  col.b = texture(uScene,uv-ab).b;
+  vec3 bl = texture(uBloom,uv).rgb;
+  col += bl*uBloomInt;
+  col *= uExposure;
+  col = aces(col);
+  // damage chromatic stress + red push
+  col = mix(col, vec3(col.r*1.25, col.g*0.75, col.b*0.75), uDamage*0.6);
+  float vig = 1.0 - r2*uVignette;
+  col *= vig;
+  col *= 1.0 - uScan*0.06*sin((uv.y)*1100.0);
+  float g = fract(sin(dot(uv*vec2(1024.0,768.0)+uTime, vec2(12.9898,78.233)))*43758.5453);
+  col += (g-0.5)*0.018;
+  o = vec4(pow(max(col,0.0),vec3(1.0/2.2)),1.0);
+}`;
+
+/** Compile/link helpers with verbose console diagnostics. */
+function compileShader(gl, type, src, name) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src); gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    const info = gl.getShaderInfoLog(sh);
+    console.error('[shader ' + name + '] ' + info + '\n' + src.split('\n').map((l, i) => (i + 1) + ': ' + l).join('\n'));
+    showFatal('shader compile failed: ' + name);
+    gl.deleteShader(sh); return null;
+  }
+  return sh;
+}
+function createProgram(gl, vsSrc, fsSrc, name) {
+  const vs = compileShader(gl, gl.VERTEX_SHADER, vsSrc, name + '.vs');
+  const fs = compileShader(gl, gl.FRAGMENT_SHADER, fsSrc, name + '.fs');
+  if (!vs || !fs) return null;
+  const p = gl.createProgram();
+  gl.attachShader(p, vs); gl.attachShader(p, fs); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    showFatal('program link failed ' + name + ': ' + gl.getProgramInfoLog(p));
+    return null;
+  }
+  gl.deleteShader(vs); gl.deleteShader(fs);
+  const prog = { p, u: {}, name };
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) {
+    const info = gl.getActiveUniform(p, i);
+    const clean = info.name.replace(/\[0\]$/, '');
+    prog.u[clean] = gl.getUniformLocation(p, info.name);
+  }
+  return prog;
+}
+/* ==========================================================================
+ * === RENDERER =============================================================
+ * WebGL2 wrapper: program/VAO caching, texture units, uniform batching,
+ * a directional shadow pass and a bloom post chain.
+ * ==========================================================================*/
+class Renderer {
+  /** @param {HTMLCanvasElement} canvas */
+  constructor(canvas) {
+    this.canvas = canvas;
+    const gl = this.gl = canvas.getContext('webgl2', {
+      antialias: false, alpha: false, depth: true, stencil: false,
+      powerPreference: 'high-performance', preserveDrawingBuffer: false
+    });
+    if (!gl) throw new Error('WebGL2 unsupported');
+    ANISO = gl.getExtension('EXT_texture_filter_anisotropic')
+      ? gl.getExtension('EXT_texture_filter_anisotropic').TEXTURE_MAX_ANISOTROPY_EXT : 0;
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
+    gl.frontFace(gl.CCW);
+    gl.clearColor(...CONFIG.world.fogColor, 1);
+    this.progs = {
+      mesh: createProgram(gl, VS_MESH, FS_MESH, 'mesh'),
+      depth: createProgram(gl, VS_DEPTH, FS_DEPTH, 'depth'),
+      bright: createProgram(gl, VS_QUAD, FS_BRIGHT, 'bright'),
+      blur: createProgram(gl, VS_QUAD, FS_BLUR, 'blur'),
+      comp: createProgram(gl, VS_QUAD, FS_COMPOSITE, 'comp')
+    };
+    this.emptyVao = gl.createVertexArray();   // used by all fullscreen passes
+    this.vaoCache = new Map();                // key -> vao (+attrib descriptors)
+    this.jointTex = null; this.jointTexW = 0; this.jointData = null;
+    this.pointTex = this.makeFloatTexture(8, 1, new Float32Array(8 * 4));
+    // white texture doubles as the "everything lit" shadow fallback + missing maps
+    this.whiteTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.whiteTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    this.stats = { draws: 0, tris: 0 };
+    this.w = 1; this.h = 1;
+    this.program = null;
+    this.texUnit = 0;
+    this._u = {};                             // last-set uniform memo (batching)
+    this.resize();
+  }
+  /* ------------------------- resources ----------------------------------- */
+  makeFloatTexture(w, h, data) {
+    const gl = this.gl;
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, h, 0, gl.RGBA, gl.FLOAT, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+  }
+  /** Get (or build+cache) a VAO for a primitive. Attrib locations are fixed. */
+  vaoFor(prim) {
+    if (prim._vao) return prim._vao;
+    const gl = this.gl;
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const bind = (loc, buf, size, type, norm) => {
+      if (!buf || loc < 0) return;
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.enableVertexAttribArray(loc);
+      if (norm) gl.vertexAttribIPointer(loc, size, type, 0, 0);
+      else gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    };
+    bind(0, prim.vboPos, 3, gl.FLOAT, false);
+    bind(1, prim.gpu.NORMAL, 3, gl.FLOAT, false);
+    bind(2, prim.gpu.TEXCOORD_0, 2, gl.FLOAT, false);
+    bind(3, prim.gpu.JOINTS_0, 4, gl.UNSIGNED_SHORT, true);   // integer joints
+    bind(4, prim.gpu.WEIGHTS_0, 4, gl.FLOAT, false);
+    if (!prim.gpu.NORMAL) { // synthesise flat normal via attrib divisor-free constant
+      gl.disableVertexAttribArray(1); gl.vertexAttrib3f(1, 0, 1, 0);
+    }
+    if (!prim.gpu.TEXCOORD_0) { gl.disableVertexAttribArray(2); gl.vertexAttrib2f(2, 0.5, 0.5); }
+    if (!prim.gpu.JOINTS_0) { gl.disableVertexAttribArray(3); gl.vertexAttrib4f(3, 0, 0, 0, 0); }
+    if (!prim.gpu.WEIGHTS_0) { gl.disableVertexAttribArray(4); gl.vertexAttrib4f(4, 1, 0, 0, 0); }
+    if (prim.indexed) {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, prim.ibo);
+    }
+    gl.bindVertexArray(null);
+    prim._vao = vao;
+    return vao;
+  }
+  disposeVaoCache() {
+    const gl = this.gl;
+    for (const p of this.vaoCache.values()) if (p._vao) gl.deleteVertexArray(p._vao);
+    this.vaoCache.clear();
+  }
+  /** Delete the GPU buffers backing a primitive + forget its cached VAO. */
+  freePrim(prim) {
+    const gl = this.gl;
+    if (prim._vao) { gl.deleteVertexArray(prim._vao); prim._vao = null; }
+    if (prim.vboPos) { gl.deleteBuffer(prim.vboPos); prim.vboPos = null; }
+    if (prim.ibo) { gl.deleteBuffer(prim.ibo); prim.ibo = null; }
+    if (prim.gpu) { for (const k in prim.gpu) { gl.deleteBuffer(prim.gpu[k]); } prim.gpu = {}; }
+    prim._dead = true;
+  }
+  /** Bilinear gaussian splat of a scalar field into a Float32Array grid. */
+  static splat(gm, cx, cz, w, h, x, z, radius, amount) {
+    const gx = (x - gm.minX) / gm.dx, gz = (z - gm.minZ) / gm.dz;
+    const r = Math.max(1, radius / gm.dx);
+    const i0 = Math.max(0, Math.floor(gx - r)), i1 = Math.min(w - 1, Math.ceil(gx + r));
+    const j0 = Math.max(0, Math.floor(gz - r)), j1 = Math.min(h - 1, Math.ceil(gz + r));
+    const inv2r2 = 1 / (2 * r * r);
+    for (let j = j0; j <= j1; j++) {
+      const dz = (j + 0.5) - gz;
+      for (let i = i0; i <= i1; i++) {
+        const ddx = (i + 0.5) - gx;
+        const g = Math.exp(-(ddx * ddx + dz * dz) * inv2r2);
+        if (g < 0.02) continue;
+        const k = j * w + i;
+        gm.field[k] += amount * g;
+        if (gm.field[k] > gm.maxVal) gm.maxVal = gm.field[k];
+      }
+    }
+  }
+  /** Diffuse-occlusion map: per-cell occluder height + ray march to the sun. */
+  computeLightmap(gm, cellsX, cellsZ, lightDirXZ, step) {
+    this.gm = {
+      minX: gm.minX, minZ: gm.minZ, dx: gm.dx, dz: gm.dz,
+      w: cellsX, h: cellsZ,
+      occ: new Float32Array(cellsX * cellsZ).fill(1),   // 1 = fully lit
+      top: new Float32Array(cellsX * cellsZ).fill(-Infinity),
+      field: new Float32Array(cellsX * cellsZ),
+      maxVal: 0
+    };
+    // rasterise geometry: highest surface per cell
+    const nx = gm.nx, nz = gm.nz, gy = gm.gy;
+    for (let t = 0; t < nx.length; t++) {
+      const i = ((nx[t] - gm.minX) / gm.dx) | 0, j = ((nz[t] - gm.minZ) / gm.dz) | 0;
+      if (i < 0 || j < 0 || i >= cellsX || j >= cellsZ) continue;
+      const k = j * cellsX + i;
+      if (gy[t] > this.gm.top[k]) this.gm.top[k] = gy[t];
+    }
+    const g = this.gm;
+    for (let k = 0; k < g.top.length; k++) if (!isFinite(g.top[k])) g.top[k] = CONFIG.world.groundY;
+    // march toward the sun sampling occluder heights above the sample point
+    const lx = lightDirXZ[0], lz = lightDirXZ[1];
+    for (let j = 0; j < cellsZ; j++) {
+      for (let i = 0; i < cellsX; i++) {
+        const k = j * cellsX + i;
+        let y = g.top[k] + 0.35;               // start just above the surface
+        let ox = gm.minX + (i + 0.5) * gm.dx, oz = gm.minZ + (j + 0.5) * gm.dz;
+        let occl = 0;
+        for (let s = 1; s <= 14; s++) {
+          ox += lx * step; oz += lz * step;
+          y += step * 1.35;                     // climb at the sun's elevation
+          const si = ((ox - gm.minX) / gm.dx) | 0, sj = ((oz - gm.minZ) / gm.dz) | 0;
+          if (si < 0 || sj < 0 || si >= cellsX || sj >= cellsZ) break;
+          const th = g.top[sj * cellsX + si];
+          if (th > y) occl = Math.max(occl, Math.min(1, (th - y) * 0.8));
+        }
+        g.occ[k] = 1 - occl * 0.75;
+      }
+    }
+  }
+  updateLightmap() {
+    const gl = this.gl, g = this.gm;
+    if (!g) return;
+    const W = g.w * g.h;
+    if (!this.lightTex) {
+      this.lightData = new Float32Array(W * 4);
+      this.lightTex = this.makeFloatTexture(g.w, g.h, this.lightData);
+    }
+    const d = this.lightData;
+    const norm = g.maxVal > 0 ? 1 / g.maxVal : 0;
+    for (let k = 0; k < W; k++) {
+      const heat = clamp(g.field[k] * norm, 0, 1);
+      const o = k * 4;
+      d[o] = g.occ[k];
+      d[o + 1] = heat;
+      d[o + 2] = 0; d[o + 3] = 1;
+      g.field[k] *= 0.965;                      // exponential decay of scorch marks
+    }
+    if (g.maxVal > 0 && g.maxVal < 0.02) g.maxVal = 0;
+    gl.bindTexture(gl.TEXTURE_2D, this.lightTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, g.w, g.h, gl.RGBA, gl.FLOAT, d);
+  }
+  /** Add a scorch mark at world (x,z) — called on every impact. Zero alloc. */
+  addScorch(x, z, radius, amount) {
+    if (!this.gm) return;
+    const g = this.gm;
+    Renderer.splat(g, g.w, g.h, g.w, g.h, x, z, radius, amount);
+  }
+  /* ------------------------- framebuffers -------------------------------- */
+  ensureTargets(w, h) {
+    const gl = this.gl;
+    if (this.scene && this.sw === w && this.sh === h) return;
+    this.disposeTargets();
+    this.sw = w; this.sh = h;
+    const mk = (bw, bh, depth) => {
+      const fb = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, bw, bh, 0, gl.RGBA, gl.HALF_FLOAT, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      let db = null;
+      if (depth) {
+        db = gl.createRenderbuffer();
+        gl.bindRenderbuffer(gl.RENDERBUFFER, db);
+        gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, bw, bh);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, db);
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return { fb, tex, db, w: bw, h: bh };
+    };
+    this.scene = mk(w, h, true);
+    const bw = Math.max(2, w >> 1), bh = Math.max(2, h >> 1);
+    this.bloomA = mk(bw, bh, false);
+    this.bloomB = mk(bw, bh, false);
+    // shadow map
+    const S = CONFIG.shadow.size;
+    this.shadowTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.shadowTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT32F, S, S, 0, gl.DEPTH_COMPONENT, gl.FLOAT, null);
+    // hardware PCF: comparing sampler + linear filter => free 2x2 taps
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.shadowFb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.shadowTex, 0);
+    gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+  disposeTargets() {
+    const gl = this.gl;
+    for (const k of ['scene', 'bloomA', 'bloomB']) {
+      const t = this[k]; if (!t) continue;
+      gl.deleteFramebuffer(t.fb); gl.deleteTexture(t.tex);
+      if (t.db) gl.deleteRenderbuffer(t.db);
+      this[k] = null;
+    }
+    if (this.shadowTex) { gl.deleteTexture(this.shadowTex); this.shadowTex = null; }
+    if (this.shadowFb) { gl.deleteFramebuffer(this.shadowFb); this.shadowFb = null; }
+  }
+  resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cw = this.canvas.clientWidth || window.innerWidth;
+    const ch = this.canvas.clientHeight || window.innerHeight;
+    let w = Math.round(cw * dpr), h = Math.round(ch * dpr);
+    const cap = CONFIG.render.pixelCap;
+    if (w * h > cap) { const s = Math.sqrt(cap / (w * h)); w = Math.round(w * s); h = Math.round(h * s); }
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w; this.canvas.height = h;
+      this.dirty = true;
+    }
+    this.w = this.canvas.width; this.h = this.canvas.height;
+    this.dprScaleX = this.w / (cw || 1);
+    return this.w !== 0 && this.h !== 0;
+  }
+  /* ------------------------- uniforms (memoised batching) ---------------- */
+  use(prog) {
+    if (this.program === prog) return;
+    this.gl.useProgram(prog.p);
+    this.program = prog; this._u = {};
+  }
+  u1f(prog, name, v) {
+    if (this._u[name] === v) return; this._u[name] = v;
+    const l = prog.u[name]; if (l) this.gl.uniform1f(l, v);
+  }
+  u1i(prog, name, v) {
+    if (this._u[name] === v) return; this._u[name] = v;
+    const l = prog.u[name]; if (l) this.gl.uniform1i(l, v);
+  }
+  u3(prog, name, a, b, c) {
+    const arr = Array.isArray(a) ? a : [a, b, c];
+    const key = name;
+    const prev = this._u[key];
+    if (prev && prev[0] === arr[0] && prev[1] === arr[1] && prev[2] === arr[2]) return;
+    this._u[key] = [arr[0], arr[1], arr[2]];
+    const l = prog.u[key]; if (l) this.gl.uniform3f(l, arr[0], arr[1], arr[2]);
+  }
+  um4(prog, name, m) {
+    const l = prog.u[name]; if (!l) return;
+    this.gl.uniformMatrix4fv(l, false, m);
+  }
+  uSkinTex(prog, skin) {
+    const gl = this.gl;
+    if (!this.jointTex || this.jointTexMax < CONFIG.render.skinJoints) {
+      if (this.jointTex) gl.deleteTexture(this.jointTex);
+      const W = 32; // 32*32 = 1024 texels >= 64 joints * 4
+      this.jointTexW = W; this.jointTexMax = 64;
+      this.jointData = new Float32Array(W * W * 4);
+      this.jointTex = this.makeFloatTexture(W, W, this.jointData);
+    }
+    // upload this skin's matrices into rows 0..ceil(n/8)
+    const n = skin.count, W = this.jointTexW, data = this.jointData;
+    for (let j = 0; j < n; j++) {
+      const b = j * 4, x = (b % W), y = ((b / W) | 0);
+      for (let c = 0; c < 4; c++) {
+        const off = ((y * W) + x + c) * 4;
+        for (let k = 0; k < 4; k++) data[off + k] = skin.jointMat[j * 16 + c * 4 + k];
+      }
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.jointTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, Math.ceil(n * 4 / W), gl.RGBA, gl.FLOAT, data.subarray(0, Math.ceil(n * 4 / W) * W * 4));
+    this.bindTex(prog, 'uJointTex', this.jointTex, 5);
+    this.u1i(prog, 'uJointTexW', W);
+  }
+  bindTex(prog, name, tex, unit) {
+    const gl = this.gl;
+    const l = prog.u[name]; if (!l) return;
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    if (this._u['T' + name] !== unit) { this._u['T' + name] = unit; gl.uniform1i(l, unit); }
+  }
+  /* ------------------------- draw calls ---------------------------------- */
+  /**
+   * Draw one primitive with material overrides.
+   * @param {Object} prim parsed primitive
+   * @param {Object} st scene state (camera/light/etc.)
+   * @param {Object} o {model, normalMat, tint, emissive, emisBoost, metallic, roughness, unlit, skinned, skin, hitFlash, receiveShadow, alpha, doubleSided, baseTex}
+   */
+  drawPrim(prim, st, o) {
+    const gl = this.gl;
+    const prog = this.progs.mesh;
+    this.use(prog);
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND);
+    const vao = this.vaoFor(prim);
+    gl.bindVertexArray(vao);
+    if (o.doubleSided) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE);
+    this.um4(prog, 'uViewProj', st.viewProj);
+    this.um4(prog, 'uLightVP', st.lightVP);
+    this.um4(prog, 'uModel', o.model);
+    const l = prog.u.uNormalMat; if (l) gl.uniformMatrix3fv(l, false, o.normalMat);
+    this.u3(prog, 'uCamPos', st.camPos);
+    this.u3(prog, 'uLightDir', CONFIG.world.sunDir);
+    this.u3(prog, 'uLightColor', st.sunColorScaled);
+    this.u3(prog, 'uSkyColor', CONFIG.world.skyColor);
+    this.u3(prog, 'uGroundColor', CONFIG.world.groundColor);
+    this.u3(prog, 'uFogColor', CONFIG.world.fogColor);
+    this.u1f(prog, 'uFogDensity', CONFIG.world.fogDensity);
+    this.u1f(prog, 'uTime', st.time);
+    this.u1f(prog, 'uShadowBias', CONFIG.shadow.bias);
+    this.bindTex(prog, 'uShadowMap', st.shadowTex || st.whiteTex, 2);
+    // planar lightmap (baked AO + dynamic scorch) — ground receives it
+    if (o.useLightmap && st.lightTex) {
+      this.bindTex(prog, 'uLightmap', st.lightTex, 3);
+      this.u1i(prog, 'uUseLightmap', 1);
+      const l4 = prog.u.uLMRect;
+      if (l4) {
+        const key = 'RECT';
+        const prev = this._u[key];
+        const r = st.lmRect;
+        if (!prev || prev[0] !== r[0] || prev[1] !== r[1] || prev[2] !== r[2] || prev[3] !== r[3]) {
+          this._u[key] = [r[0], r[1], r[2], r[3]];
+          gl.uniform4f(l4, r[0], r[1], r[2], r[3]);
+        }
+      }
+    } else {
+      this.u1i(prog, 'uUseLightmap', 0);
+    }
+    this.u1i(prog, 'uReceiveShadow', o.receiveShadow === false ? 0 : 1);
+    this.u1i(prog, 'uSkinned', o.skinned ? 1 : 0);
+    if (o.skinned && o.skin) this.uSkinTex(prog, o.skin);
+    const mat = prim.mat;
+    const tint = o.tint || [1, 1, 1];
+    const base = mat ? mat.base : [0.7, 0.7, 0.7];
+    this.u3(prog, 'uBaseColor', [base[0] * tint[0], base[1] * tint[1], base[2] * tint[2]]);
+    this.u1f(prog, 'uMetallic', o.metallic !== undefined ? o.metallic : (mat ? mat.metallic : 0.6));
+    this.u1f(prog, 'uRoughness', o.roughness !== undefined ? o.roughness : (mat ? clamp(mat.roughness, 0.06, 1) : 0.6));
+    this.u1f(prog, 'uAlpha', o.alpha !== undefined ? o.alpha : 1);
+    const em = o.emissive || (mat ? mat.emissive : [0, 0, 0]);
+    this.u3(prog, 'uEmissive', em);
+    this.u1f(prog, 'uEmissiveBoost', o.emisBoost !== undefined ? o.emisBoost : (mat && mat.emissive && (mat.emissive[0] + mat.emissive[1] + mat.emissive[2]) > 0.02 ? 1.6 : 1.0));
+    this.u1f(prog, 'uHitFlash', o.hitFlash || 0);
+    this.u1i(prog, 'uUnlit', o.unlit ? 1 : 0);
+    const tex = o.baseTex !== undefined ? o.baseTex : (mat && mat.baseTex >= 0 ? prim._tex : null);
+    if (tex) {
+      this.bindTex(prog, 'uBaseTexS', tex, 0);
+      this.u1i(prog, 'uUseBaseTex', 1);
+    } else {
+      this.bindTex(prog, 'uBaseTexS', st.whiteTex, 0);
+      this.u1i(prog, 'uUseBaseTex', 0);
+    }
+    // point lights
+    this.u1i(prog, 'uNumPoints', st.numPoints);
+    if (st.numPoints > 0) {
+      const l2 = prog.u.uPointPos; if (l2) gl.uniform3fv(l2, st.pointPosArr.subarray(0, st.numPoints * 3));
+      this.bindTex(prog, 'uPointColors', st.pointTex, 1);
+    }
+    if (prim.indexed) {
+      gl.drawElements(gl.TRIANGLES, prim.iboCount, prim.iboType, 0);
+      this.stats.tris += prim.iboCount / 3;
+    } else {
+      gl.drawArrays(gl.TRIANGLES, 0, prim.count);
+      this.stats.tris += prim.count / 3;
+    }
+    this.stats.draws++;
+    gl.bindVertexArray(null);
+  }
+  /** Depth-only pass for the shadow map. */
+  drawPrimDepth(prim, model, skinned, skin) {
+    const gl = this.gl, prog = this.progs.depth;
+    this.use(prog);
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND);
+    this.um4(prog, 'uLightVP', this._lightVP);
+    this.um4(prog, 'uModel', model);
+    this.u1i(prog, 'uSkinned', skinned ? 1 : 0);
+    if (skinned && skin) {
+      // reuse joint texture bound in main pass pipeline
+      this.uSkinTexSimple(prog, skin);
+    }
+    gl.disable(gl.CULL_FACE);   // two-sided shadows reduce acne on thin props
+    const vao = this.vaoFor(prim);
+    gl.bindVertexArray(vao);
+    if (prim.indexed) gl.drawElements(gl.TRIANGLES, prim.iboCount, prim.iboType, 0);
+    else gl.drawArrays(gl.TRIANGLES, 0, prim.count);
+    this.stats.draws++;
+    gl.bindVertexArray(null);
+  }
+  uSkinTexSimple(prog, skin) {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + 5);
+    gl.bindTexture(gl.TEXTURE_2D, this.jointTex);
+    if (this._u['JT' + prog.name] !== 5) { this._u['JT' + prog.name] = 5; const l = prog.u.uJointTex; if (l) gl.uniform1i(l, 5); }
+    const l = prog.u.uJointTexW; if (l) gl.uniform1i(l, this.jointTexW);
+  }
+  setLightVP(m) { this._lightVP = m; }
+  /** Fullscreen triangle-strip-free quad using gl_VertexID (no buffers). */
+  fullscreen(prog, drawFn) {
+    const gl = this.gl;
+    this.use(prog);
+    gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.disable(gl.CULL_FACE);
+    gl.bindVertexArray(this.emptyVao);
+    drawFn();
+    gl.bindVertexArray(null);
+  }
+  beginPost(st) {
+    const gl = this.gl;
+    this.stats.draws = 0; this.stats.tris = 0;
+    // 1) bright pass
+    this.ensureTargets(this.w, this.h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomA.fb);
+    gl.viewport(0, 0, this.bloomA.w, this.bloomA.h);
+    const pb = this.progs.bright;
+    this.fullscreen(pb, () => {
+      this.bindTex(pb, 'uSrc', this.scene.tex, 0);
+      this.u1f(pb, 'uThresh', CONFIG.bloom.threshold);
+      this.u1f(pb, 'uKnee', CONFIG.bloom.knee);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    });
+    // 2) separable gaussian blur (H then V) at half res
+    const bl = this.progs.blur;
+    const px = (1 / this.bloomA.w) * CONFIG.bloom.radius, py = (1 / this.bloomA.h) * CONFIG.bloom.radius;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomB.fb);
+    gl.viewport(0, 0, this.bloomB.w, this.bloomB.h);
+    this.fullscreen(bl, () => {
+      this.bindTex(bl, 'uSrc', this.bloomA.tex, 0);
+      gl.uniform2f(bl.u.uDir, px, 0); this._u.uDir = null;
+      this.u1i(bl, 'uSamples', CONFIG.bloom.samples);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    });
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomA.fb);
+    gl.viewport(0, 0, this.bloomA.w, this.bloomA.h);
+    this.fullscreen(bl, () => {
+      this.bindTex(bl, 'uSrc', this.bloomB.tex, 0);
+      gl.uniform2f(bl.u.uDir, 0, py); this._u.uDir = null;
+      this.u1i(bl, 'uSamples', CONFIG.bloom.samples);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    });
+    // 3) composite to default framebuffer
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.w, this.h);
+    const pc = this.progs.comp;
+    this.fullscreen(pc, () => {
+      this.bindTex(pc, 'uScene', this.scene.tex, 0);
+      this.bindTex(pc, 'uBloom', this.bloomA.tex, 1);
+      this.u1f(pc, 'uExposure', CONFIG.render.exposure);
+      this.u1f(pc, 'uBloomInt', CONFIG.bloom.intensity);
+      gl.uniform1f(pc.u.uTime, st.time); this._u.uTime = null;
+      gl.uniform1f(pc.u.uVignette, st.vignette !== undefined ? st.vignette : 0.55);
+      gl.uniform1f(pc.u.uAberr, st.aberr || 0);
+      gl.uniform1f(pc.u.uDamage, st.damage || 0);
+      gl.uniform1f(pc.u.uScan, st.scan || 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    });
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(true);
+  }
+  beginScene() {
+    const gl = this.gl;
+    this.ensureTargets(this.w, this.h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.scene.fb);
+    gl.viewport(0, 0, this.w, this.h);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  }
+  beginShadow() {
+    const gl = this.gl, S = CONFIG.shadow.size;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFb);
+    gl.viewport(0, 0, S, S);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+  }
+  endShadow() {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.scene.fb);
+    gl.viewport(0, 0, this.w, this.h);
+  }
+}
+/* ==========================================================================
+ * === PROCEDURAL ANIMATION =================================================
+ * No animation clips are assumed to exist in the GLBs, so every motion is
+ * synthesised from code:
+ *   - MechRig: joint-name pattern matching -> a semantic rig description
+ *     (hips / spine / head / 2 arms / 2 legs) that works on BOTH provided
+ *     mech skeletons (atlas "Pelvis/Spine_1/L_Arm_1..." and kitsune
+ *     "B_38/B_0/B_37/B_14..") and degrades gracefully when parts are absent.
+ *   - torsoSway / stepBob / recoil spring / foot grounding IK.
+ * All of it writes into pre-allocated Float32Arrays (zero GC).
+ * ==========================================================================*/
+
+/** Bone classification keywords (lowercase substring match, first hit wins). */
+const RIG_PATTERNS = {
+  hips:    ['pelvis', 'hips', 'b_38', 'hip_root', 'root'],
+  spine1:  ['spine_1', 'spine1', 'b_0', 'chest_low', 'abdomen'],
+  spine2:  ['spine_2', 'spine2', 'b_37', 'chest', 'thorax'],
+  neck:    ['neck', 'b_36'],
+  head:    ['head', 'antler', 'b_39', 'tower_end'],
+  clavL:   ['l_arm_1', 'shoulder_l', 'l_shoulder', 'clavicle_l', 'arm_l_0'],
+  upperL:  ['l_arm_2', 'upperarm_l', 'arm_upper_l', 'a_1'],
+  foreL:   ['l_arm_3', 'forearm_l', 'arm_lower_l', 'hand_l', 'a_2'],
+  handL:   ['l_arm_4', 'l_hand', 'hand_l'],
+  clavR:   ['r_arm_1', 'shoulder_r', 'r_shoulder', 'clavicle_r', 'arm_r_0'],
+  upperR:  ['r_arm_2', 'upperarm_r', 'arm_upper_r'],
+  foreR:   ['r_arm_3', 'forearm_r', 'arm_lower_r', 'hand_r'],
+  handR:   ['r_arm_4', 'r_hand', 'hand_r'],
+  thighL:  ['leg_l_1', 'thigh_l', 'l_leg_1', 'leg_upper_l'],
+  kneeL:   ['leg_l_2', 'calf_l', 'l_leg_2', 'shin_l'],
+  ankleL:  ['leg_l_3', 'foot_l', 'ankle_l', 'toe_l'],
+  toeL:    ['leg_l_4', 'ball_l', 'toe_end'],
+  thighR:  ['leg_r_1', 'thigh_r', 'r_leg_1', 'leg_upper_r'],
+  kneeR:   ['leg_r_2', 'calf_r', 'r_leg_2', 'shin_r'],
+  ankleR:  ['leg_r_3', 'foot_r', 'ankle_r', 'toe_r'],
+  toeR:    ['leg_r_4', 'ball_r', 'toe_end']
+};
+
+/**
+ * Build a semantic rig descriptor from a parsed skin + node list.
+ * @param {Object} asset parsed GLB asset
+ * @param {Object} skin  parsed skin (joints as node indices)
+ * @returns {Object} rig {hips,spine1,spine2,head,arms:[{up,fore,hand}],legs:[...],jointIndex:{}}
+ */
+function buildRig(asset, skin) {
+  const rig = { ok: !!skin, map: {}, joints: skin ? skin.joints : [], skin };
+  if (!skin) return rig;
+  const used = new Set();
+  const nameOf = (nodeIdx) => (asset.nodes[nodeIdx] ? asset.nodes[nodeIdx].name : '');
+  for (const slot in RIG_PATTERNS) {
+    const pats = RIG_PATTERNS[slot];
+    let found = -1;
+    for (let j = 0; j < skin.joints.length; j++) {
+      if (used.has(j)) continue;
+      const nm = nameOf(skin.joints[j]).toLowerCase();
+      for (const p of pats) {
+        if (nm.indexOf(p) !== -1) { found = j; break; }
+      }
+      if (found >= 0) break;
+    }
+    if (found < 0) {
+      // relaxed pass: token containment ignoring separators
+      for (let j = 0; j < skin.joints.length && found < 0; j++) {
+        if (used.has(j)) continue;
+        const nm = nameOf(skin.joints[j]).toLowerCase().replace(/[_\s]/g, '');
+        for (const p of pats) {
+          if (nm.indexOf(p.replace(/_/g, '')) !== -1) { found = j; break; }
+        }
+      }
+    }
+    rig.map[slot] = found;
+    if (found >= 0) used.add(found);
+  }
+  // derive bind-space positions of each joint (model space) from IBM
+  rig.bindPos = new Float32Array(skin.count * 3);
+  const ibm = skin.ibm;
+  const inv = MAT4_ID();
+  for (let j = 0; j < skin.count; j++) {
+    mat4.invert(inv, ibm.subarray(j * 16, j * 16 + 16));
+    rig.bindPos[j * 3] = inv[12]; rig.bindPos[j * 3 + 1] = inv[13]; rig.bindPos[j * 3 + 2] = inv[14];
+  }
+  rig.parentOf = {};
+  for (let j = 0; j < skin.joints.length; j++) rig.parentOf[skin.joints[j]] = j;
+  return rig;
+}
+
+/** Small spring scalar used for recoil + camera shake recovery. */
+class Spring {
+  constructor(k, d) { this.k = k; this.d = d; this.x = 0; this.v = 0; }
+  /** Add an instantaneous angular velocity impulse. */
+  impulse(v) { this.v += v; }
+  /** Integrate toward zero with semi-implicit Euler (stable at dt<=0.1). */
+  step(dt) {
+    const a = -this.k * this.x - this.d * this.v;
+    this.v += a * dt;
+    this.x += this.v * dt;
+    if (Math.abs(this.x) < 1e-5 && Math.abs(this.v) < 1e-4) { this.x = 0; this.v = 0; }
+    return this.x;
+  }
+}
+
+/**
+ * Heightmap sampling over the city mesh (raycast approximation).
+ * Built once by rasterising world-space vertices into a coarse grid and
+ * keeping the highest surface below the feet per cell.
+ */
+class HeightMap {
+  constructor(minX, maxX, minZ, maxZ, cellsX, cellsZ) {
+    this.minX = minX; this.maxX = maxX; this.minZ = minZ; this.maxZ = maxZ;
+    this.cx = cellsX; this.cz = cellsZ;
+    this.h = new Float32Array(cellsX * cellsZ).fill(-Infinity);
+    this.dx = (maxX - minX) / cellsX; this.dz = (maxZ - minZ) / cellsZ;
+  }
+  add(x, y, z) {
+    const i = ((x - this.minX) / this.dx) | 0, j = ((z - this.minZ) / this.dz) | 0;
+    if (i < 0 || j < 0 || i >= this.cx || j >= this.cz) return;
+    const k = j * this.cx + i;
+    if (y > this.h[k]) this.h[k] = y;
+  }
+  /** Bilinear ground height at (x,z); falls back to default floor. */
+  sample(x, z) {
+    const fx = (x - this.minX) / this.dx - 0.5, fz = (z - this.minZ) / this.dz - 0.5;
+    const i0 = clamp(Math.floor(fx), 0, this.cx - 1), j0 = clamp(Math.floor(fz), 0, this.cz - 1);
+    const i1 = clamp(i0 + 1, 0, this.cx - 1), j1 = clamp(j0 + 1, 0, this.cz - 1);
+    const tx = clamp(fx - i0, 0, 1), tz = clamp(fz - j0, 0, 1);
+    const h00 = this.h[j0 * this.cx + i0], h10 = this.h[j0 * this.cx + i1];
+    const h01 = this.h[j1 * this.cx + i0], h11 = this.h[j1 * this.cx + i1];
+    const g = CONFIG.world.groundY;
+    const a = lerp(isFinite(h00) ? h00 : g, isFinite(h10) ? h10 : g, tx);
+    const b = lerp(isFinite(h01) ? h01 : g, isFinite(h11) ? h11 : g, tx);
+    return lerp(a, b, tz);
+  }
+}
+
+/**
+ * ProceduralMech — drives one skinned (or rigid) mech instance.
+ * Owns: root transform, locomotion state, sway/bob/recoil springs, IK targets,
+ * and the final joint matrix array uploaded to the GPU.
+ */
+class ProceduralMech {
+  /**
+   * @param {Object} asset parsed GLB
+   * @param {Object|null} skin parsed skin or null (rigid body fallback)
+   * @param {Object} def visual/gameplay definition
+   */
+  constructor(asset, skin, def) {
+    this.asset = asset; this.skin = skin; this.def = def;
+    this.rig = skin ? buildRig(asset, skin) : { ok: false, map: {} };
+    this.pos = V3(0, 0, 0);
+    this.vel = V3(0, 0, 0);
+    this.facing = 0;                 // yaw radians
+    this.targetFacing = 0;
+    this.groundY = 0;
+    this.airborne = false;
+    this.phase = rnd(Math.PI * 2);   // gait phase
+    this.speedNorm = 0;
+    this.recoilP = new Spring(CONFIG.mech.recoil.springK, CONFIG.mech.recoil.damping);
+    this.recoilY = new Spring(CONFIG.mech.recoil.springK * 0.8, CONFIG.mech.recoil.damping);
+    this.bodyKick = new Spring(48, 9);
+    this.swayT = rnd(10);
+    this.aimPitch = 0;
+    this.aimYaw = 0;
+    this.hitFlash = 0;
+    this.dead = false;
+    this.hp = 1; this.maxHp = 1;
+    this.footGround = [V3(), V3()];  // smoothed foot contact heights
+    this.stepEvents = [];            // consumed by audio (footfall triggers)
+    this._lastStepSign = 1;
+    // per-joint override rotations produced by the procedural layer
+    const nj = skin ? skin.count : 1;
+    this.jointRot = new Float32Array(nj * 4);   // quaternion offsets
+    this.jointPos = new Float32Array(nj * 3);   // absolute local position overrides
+    this.jointHasPos = new Uint8Array(nj);
+    // computed matrices
+    this.rootWorld = MAT4_ID();
+    this.localAnim = [];
+    for (let i = 0; i < asset.nodes.length; i++) this.localAnim.push(MAT4_ID());
+    this.globalAnim = [];
+    for (let i = 0; i < asset.nodes.length; i++) this.globalAnim.push(MAT4_ID());
+    this.childSets = asset.nodes.map(n => n.children);
+    this.parents = new Int32Array(asset.nodes.length).fill(-1);
+    for (let i = 0; i < asset.nodes.length; i++)
+      for (const c of asset.nodes[i].children) if (c < this.parents.length) this.parents[c] = i;
+    this.isRoot = (() => {
+      const has = new Set(); for (const n of asset.nodes) for (const c of n.children) has.add(c);
+      const r = new Uint8Array(asset.nodes.length);
+      for (let i = 0; i < r.length; i++) r[i] = has.has(i) ? 0 : 1;
+      return r;
+    })();
+  }
+  /** Register a firing impulse: pitch-up + random yaw + body kickback. */
+  fireRecoil(strength = 1) {
+    const C = CONFIG.mech.recoil;
+    this.recoilP.impulse(C.pitchImpulse * 34 * strength);
+    this.recoilY.impulse(rnd(-1, 1) * C.yawJitter * 30 * strength);
+    this.bodyKick.impulse(-C.kickback * 22 * strength);
+  }
+  /**
+   * Core update.
+   * @param {number} dt seconds (already clamped)
+   * @param {number} moveMag 0..1 desired locomotion intensity
+   * @param {Object} ctl {moveX, moveZ, boost, jump, aimYaw, aimPitch}
+   * @param {HeightMap|null} hm
+   */
+  update(dt, ctl, hm) {
+    const M = CONFIG.mech;
+    this.swayT += dt;
+    /* ---- locomotion integration ---------------------------------------- */
+    const wish = _s.v1;
+    vec3.set(wish, ctl.moveX, 0, ctl.moveZ);
+    const wishLen = vec3.len(wish);
+    if (wishLen > 1e-4) vec3.scale(wish, wish, Math.min(1, wishLen) / wishLen);
+    const boost = ctl.boost && (ctl.boostCharge === undefined || ctl.boostCharge > 0);
+    const spd = M.walk.speed * (boost ? M.boost.mult : 1) * (this.airborne ? M.boost.airMult : 1);
+    const target = _s.v2;
+    vec3.scale(target, wish, wishLen > 0 ? spd : 0);
+    const rate = wishLen > 0 ? M.walk.accel : M.walk.friction;
+    const k = damp(rate, dt);
+    vec3.madd(this.vel, this.vel, target, k);
+    if (wishLen > 0) vec3.scale(this.vel, this.vel, 1 - k);
+    // gravity + ground
+    if (!this.airborne) this.vel[1] = 0;
+    else this.vel[1] -= M.jump.gravity * dt;
+    vec3.madd(this.pos, this.pos, this.vel, dt);
+    const gy = hm ? hm.sample(this.pos[0], this.pos[2]) : CONFIG.world.groundY;
+    this.groundY = gy;
+    if (this.pos[1] <= gy) {
+      if (this.airborne && this.vel[1] < -3) this.onLand(-this.vel[1]);
+      this.pos[1] = gy; this.vel[1] = 0; this.airborne = false;
+    } else if (this.pos[1] - gy > 0.02) this.airborne = true;
+    if (ctl.jump && !this.airborne) { this.vel[1] = M.jump.impulse; this.airborne = true; }
+    /* ---- facing --------------------------------------------------------- */
+    this.aimYaw = ctl.aimYaw !== undefined ? ctl.aimYaw : this.aimYaw;
+    this.aimPitch = ctl.aimPitch !== undefined ? ctl.aimPitch : this.aimPitch;
+    let faceTarget = this.facing;
+    if (wishLen > 0.05) {
+      // move direction relative to camera yaw: model forward is +Z in bind space
+      faceTarget = Math.atan2(ctl.moveX, ctl.moveZ) + (ctl.camYaw !== undefined ? ctl.camYaw : 0);
+    }
+    if (ctl.faceAim) faceTarget = this.aimYaw;
+    let dAng = faceTarget - this.facing;
+    while (dAng > Math.PI) dAng -= Math.PI * 2;
+    while (dAng < -Math.PI) dAng += Math.PI * 2;
+    this.facing += dAng * damp(M.walk.turnSmooth, dt);
+    /* ---- gait phase + bobbing ------------------------------------------ */
+    const speed = Math.hypot(this.vel[0], this.vel[2]);
+    this.speedNorm = clamp(speed / M.walk.speed, 0, 2.2);
+    const strideFreq = Math.max(M.stride.minFreq, speed / M.stride.length * Math.PI);
+    this.phase += strideFreq * dt * (this.airborne ? 0.25 : 1);
+    const bobRaw = easeInOutCubic((Math.sin(this.phase) + 1) * 0.5) * 2 - 1;
+    const bob = bobRaw * M.bob.amp * Math.min(1, this.speedNorm) * (this.airborne ? 0 : 1);
+    // footfall events (audio): detect sign change of sin(phase)
+    const sgn = Math.sin(this.phase) >= 0 ? 1 : -1;
+    if (sgn !== this._lastStepSign && !this.airborne && this.speedNorm > 0.25) {
+      this.stepEvents.push(this.pos[0], this.pos[1], this.pos[2]);
+    }
+    this._lastStepSign = sgn;
+    /* ---- springs -------------------------------------------------------- */
+    const recP = clamp(this.recoilP.step(dt), -M.recoil.maxAngle, M.recoil.maxAngle);
+    const recY = clamp(this.recoilY.step(dt), -M.recoil.maxAngle, M.recoil.maxAngle);
+    const kick = this.bodyKick.step(dt);
+    /* ---- torso sway ----------------------------------------------------- */
+    const sw = M.sway;
+    const swayAmt = (0.35 + this.speedNorm * sw.velGain);
+    const roll = Math.sin(this.swayT * sw.freq) * sw.ampRoll * swayAmt
+               + Math.cos(this.phase * 0.5) * sw.ampRoll * 0.5 * Math.min(1, this.speedNorm);
+    const pitch = Math.sin(this.swayT * sw.freq * 0.73 + 1.1) * sw.ampPitch * swayAmt;
+    /* ---- write joint overrides ----------------------------------------- */
+    this.applyPose({ bob, kick, roll, pitch, recP, recY, speed: this.speedNorm, dt, hm });
+    if (this.hitFlash > 0) this.hitFlash = Math.max(0, this.hitFlash - dt * 6);
+  }
+  /** Landing squash: extra spring energy proportional to impact speed. */
+  onLand(impact) {
+    this.bodyKick.impulse(-clamp(impact, 0, 14) * 2.4);
+    this.recoilP.impulse(clamp(impact, 0, 14) * 1.2);
+  }
+  /**
+   * Compose all procedural layers into per-joint quaternion offsets and run
+   * the skeleton evaluation (forward kinematics + simple analytic leg IK).
+   */
+  applyPose(P) {
+    const rig = this.rig, M = CONFIG.mech;
+    // reset offsets
+    const jr = this.jointRot, jp = this.jointPos, jhp = this.jointHasPos;
+    for (let i = 0; i < jr.length; i += 4) quat.ident(jr, jr.subarray(i, i + 4)), jp[i] = 0;
+    for (let i = 0; i < jhp.length; i++) jhp[i] = 0;
+    const off = (slot) => rig.map[slot];
+    const setQ = (slot, q) => {
+      const j = off(slot); if (j < 0) return;
+      quat.copy(jr.subarray(j * 4, j * 4 + 4), q);
+    };
+    const addQ = (slot, x, y, z, w) => {
+      const j = off(slot); if (j < 0) return;
+      quat.mul(_s.q3, jr.subarray(j * 4, j * 4 + 4), quat.set(_s.q2, x, y, z, w));
+      quat.copy(jr.subarray(j * 4, j * 4 + 4), _s.q3);
+    };
+    const eulerTo = (out, rx, ry, rz) => quat.fromEulerXYZ(out, rx, ry, rz);
+    /* root (hips): bob + kickback along local Z + slight lean into movement */
+    const hj = off('hips');
+    if (hj >= 0) {
+      jhp[hj] = 1;
+      jp[hj * 3] = 0; jp[hj * 3 + 1] = P.bob + P.kick * 0.12; jp[hj * 3 + 2] = P.kick * 0.5;
+      eulerTo(_s.q1, P.pitch * 0.5 + P.recP * 0.35, P.roll * 0.35 + P.recY * 0.35, P.roll * 0.25);
+      quat.copy(jr.subarray(hj * 4, hj * 4 + 4), _s.q1);
+    }
+    /* spine chain: sway split across spine1/spine2, recoil mostly upper body */
+    eulerTo(_s.q1, P.pitch * 0.4 + P.recP * 0.45, P.recY * 0.5 + P.roll * 0.2, P.roll * 0.55);
+    setQ('spine1', _s.q1);
+    eulerTo(_s.q1, P.pitch * 0.35 + P.recP * 0.55, P.recY * 0.4, P.roll * 0.45);
+    setQ('spine2', _s.q1);
+    /* head counter-stabilise (looks slightly opposite to sway) + aim pitch */
+    eulerTo(_s.q1, -P.pitch * 0.5 - P.recP * 0.25 + P.aimPitch * 0.35, -P.recY * 0.3 - P.aimYawOffset * 0.3, 0);
+    setQ('head', _s.q1);
+    /* arms: right arm tracks aim (weapon arm), left arm counter-balances */
+    const swing = Math.sin(this.phase) * 0.30 * Math.min(1, P.speed);
+    const swing2 = Math.sin(this.phase + Math.PI) * 0.30 * Math.min(1, P.speed);
+    eulerTo(_s.q1, -(0.10 + P.aimPitch * 0.55) - P.recP * 0.6, P.aimYawOffset * 0.55, 0.06);
+    setQ('upperR', _s.q1);
+    eulerTo(_s.q1, -(0.18 + P.aimPitch * 0.35) - P.recP * 0.4, P.aimYawOffset * 0.25, 0.10);
+    setQ('foreR', _s.q1);
+    eulerTo(_s.q1, swing * 0.8 + P.pitch * 0.3, -P.aimYawOffset * 0.2, -0.10);
+    setQ('upperL', _s.q1);
+    eulerTo(_s.q1, swing * 0.5 - 0.12, 0, -0.14);
+    setQ('foreL', _s.q1);
+    /* legs: analytic 2-bone IK-ish using gait phase + foot grounding */
+    const lift = M.ik.toeLift;
+    const gp = P.hm ? P.hm : null;
+    for (let side = 0; side < 2; side++) {
+      const ph = this.phase + (side === 0 ? 0 : Math.PI);
+      const sinp = Math.sin(ph), cosp = Math.cos(ph);
+      const moving = Math.min(1, P.speed);
+      const swingLeg = Math.max(0, sinp) * moving;
+      const thighSlot = side === 0 ? 'thighL' : 'thighR';
+      const kneeSlot = side === 0 ? 'kneeL' : 'kneeR';
+      const ankleSlot = side === 0 ? 'ankleL' : 'ankleR';
+      // hip drop / stance lift
+      const stance = Math.max(0, -sinp) * moving;
+      eulerTo(_s.q1, (-swingLeg * 0.55 + stance * 0.18) * 1.0, cosp * 0.06 * moving, (side ? -1 : 1) * (0.04 + P.roll * 0.3));
+      setQ(thighSlot, _s.q1);
+      eulerTo(_s.q1, (swingLeg * 0.95 + 0.12 * moving) * -1, 0, 0);
+      setQ(kneeSlot, _s.q1);
+      eulerTo(_s.q1, swingLeg * 0.45 - stance * 0.25 + lift * 0.4, 0, 0);
+      setQ(ankleSlot, _s.q1);
+      // foot grounding: sample terrain under each foot and bias ankle pitch
+      if (gp) {
+        const fx = this.pos[0] + (side ? -0.45 : 0.45) * Math.cos(this.facing) + 0.35 * Math.sin(this.facing);
+        const fz = this.pos[2] + (side ? -0.45 : 0.45) * Math.sin(this.facing) - 0.35 * Math.cos(this.facing);
+        const gh = gp.sample(fx, fz);
+        const slope = clamp((gh - this.groundY) * 1.4, -0.35, 0.35);
+        this.footGround[side][0] = lerp(this.footGround[side][0], gh, damp(M.ik.groundSmooth, P.dt));
+        addQ(ankleSlot, 0, Math.sin(-slope * 0.5), 0, Math.cos(-slope * 0.5));
+        addQ(thighSlot, Math.sin(-slope * 0.25), 0, 0, Math.cos(-slope * 0.25));
+      }
+    }
+    /* ---- FK evaluation -------------------------------------------------- */
+    this.evaluateSkeleton(P);
+  }
+  /** Rebuild animated global matrices + skin joint matrices. */
+  evaluateSkeleton(P) {
+    const nodes = this.asset.nodes, na = this.localAnim, ga = this.globalAnim;
+    const rootScale = this.def.scale || 1;
+    // root transform: position, facing yaw, uniform scale
+    quat.fromAxisAngle(_s.q1, 0, 1, 0, this.facing);
+    vec3.set(_s.v3, rootScale, rootScale, rootScale);
+    mat4.compose(this.rootWorld, this.pos, _s.q1, _s.v3);
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (this.isRoot[i]) {
+        mat4.mul(na[i], this.rootWorld, n.local);
+      } else {
+        const p = this.parents[i];
+        mat4.mul(na[i], ga[p], n.local);
+      }
+      // apply procedural offset (rotation about joint origin + optional pos)
+      const m = this.skinJointIndex(i);
+      if (m >= 0) {
+        const jr = this.jointRot, jhp = this.jointHasPos, jp = this.jointPos;
+        if (jhp[m]) {
+          vec3.set(_s.v4, jp[m * 3], jp[m * 3 + 1], jp[m * 3 + 2]);
+          mat4.translate(na[i], na[i], _s.v4);
+        }
+        if (jr[m * 4] || jr[m * 4 + 1] || jr[m * 4 + 2] || jr[m * 4 + 3] !== 1) {
+          mat4.compose(_s.mTmp, _s.v5.set ? (vec3.set(_s.v5, 0, 0, 0), _s.v5) : _s.v5, jr.subarray(m * 4, m * 4 + 4), _s.v3.set ? (vec3.set(_s.v3, 1, 1, 1), _s.v3) : _s.v3);
+          mat4.mul(na[i], na[i], _s.mTmp);
+        }
+      }
+      mat4.copy(ga[i], na[i]);
+    }
+    // skin matrices: globalAnimated * inverseBindMatrix
+    if (this.skin) {
+      const s = this.skin;
+      for (let j = 0; j < s.count; j++) {
+        const nodeIdx = s.joints[j];
+        mat4.mul(s.jointMat.subarray(j * 16, j * 16 + 16),
+          ga[nodeIdx], s.ibm.subarray(j * 16, j * 16 + 16));
+      }
+    }
+    // normal matrix for root (uniform scale -> rotation only)
+    mat4.copy(_s.m2, this.rootWorld);
+    mat4.toQuat(_s.q2, this.rootWorld);
+    mat4.compose(_s.m2, _s.v1.set ? (vec3.set(_s.v1, 0, 0, 0), _s.v1) : _s.v1, _s.q2, vec3.set(_s.v3, rootScale, rootScale, rootScale));
+    this.normalMat = this.normalMat || new Float32Array(9);
+    const m = _s.m2;
+    this.normalMat[0] = m[0]; this.normalMat[1] = m[1]; this.normalMat[2] = m[2];
+    this.normalMat[3] = m[4]; this.normalMat[4] = m[5]; this.normalMat[5] = m[6];
+    this.normalMat[6] = m[8]; this.normalMat[7] = m[9]; this.normalMat[8] = m[10];
+  }
+  skinJointIndex(nodeIdx) {
+    if (!this.rig.ok) return -1;
+    if (this._jointLookup === undefined || this._jointLookupAsset !== this.asset) {
+      this._jointLookupAsset = this.asset;
+      this._jointLookup = new Int32Array(this.asset.nodes.length).fill(-1);
+      for (let j = 0; j < this.skin.joints.length; j++) this._jointLookup[this.skin.joints[j]] = j;
+    }
+    return this._jointLookup[nodeIdx];
+  }
+  /** Approximate muzzle position in world space (right-hand weapon bone). */
+  muzzleWorld(out) {
+    const rig = this.rig;
+    let node = rig.map.foreR >= 0 ? this.skin.joints[rig.map.foreR]
+             : rig.map.upperR >= 0 ? this.skin.joints[rig.map.upperR]
+             : rig.map.spine2 >= 0 ? this.skin.joints[rig.map.spine2] : -1;
+    if (node < 0) node = 0;
+    const g = this.globalAnim[node] || this.rootWorld;
+    out[0] = g[12] + g[8] * 0.9; out[1] = g[13] + g[9] * 0.9 + 0.2; out[2] = g[14] + g[10] * 0.9;
+    return out;
+  }
+  /** Eye/torso anchor for cameras & targeting. */
+  chestWorld(out) {
+    const rig = this.rig;
+    let node = rig.map.spine2 >= 0 ? this.skin.joints[rig.map.spine2]
+             : rig.map.hips >= 0 ? this.skin.joints[rig.map.hips] : -1;
+    if (node < 0) { out[0] = this.pos[0]; out[1] = this.pos[1] + 2; out[2] = this.pos[2]; return out; }
+    const g = this.globalAnim[node];
+    out[0] = g[12]; out[1] = g[13]; out[2] = g[14];
+    return out;
+  }
+}
+/* ==========================================================================
+ * === PROCEDURAL FALLBACK GEOMETRY =========================================
+ * If a GLB cannot be parsed we still draw something: a labelled coloured box
+ * built entirely in code (never white-screens the app).
+ * ==========================================================================*/
+/** Build a unit cube primitive (pos/norm/uv/idx) directly on the GPU. */
+function makeBoxPrim(gl, color, emissive) {
+  const p = {
+    mesh: -1, prim: -1, mat: { base: color, metallic: 0.4, roughness: 0.6, emissive: emissive || [0, 0, 0],
+      baseTex: -1, name: 'procedural-box', doubleSided: false },
+    count: 24, indexed: true, skinned: false, vbo: {}, gpu: {},
+    bboxMin: [-0.5, -0.5, -0.5], bboxMax: [0.5, 0.5, 0.5], name: 'box'
+  };
+  const pos = [], nor = [], uv = [];
+  const faces = [
+    [[0, 0, 1], [[-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5]]],
+    [[0, 0, -1], [[0.5, -0.5, -0.5], [-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5]]],
+    [[0, 1, 0], [[-0.5, 0.5, 0.5], [0.5, 0.5, 0.5], [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5]]],
+    [[0, -1, 0], [[-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [-0.5, -0.5, 0.5]]],
+    [[1, 0, 0], [[0.5, -0.5, 0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5]]],
+    [[-1, 0, 0], [[-0.5, -0.5, -0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [-0.5, 0.5, -0.5]]]
+  ];
+  const idx = [];
+  for (let f = 0; f < 6; f++) {
+    const nrm = faces[f][0], vs = faces[f][1];
+    for (const v of vs) { pos.push(v[0], v[1], v[2]); nor.push(nrm[0], nrm[1], nrm[2]); }
+    uv.push(0, 0, 1, 0, 1, 1, 0, 1);
+    const b = f * 4; idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+  }
+  const mkBuf = (arr, type) => {
+    const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW); return b;
+  };
+  p.vboPos = mkBuf(new Float32Array(pos));
+  p.gpu.NORMAL = mkBuf(new Float32Array(nor));
+  p.gpu.TEXCOORD_0 = mkBuf(new Float32Array(uv));
+  p.ibo = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, p.ibo);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
+  p.iboCount = idx.length; p.iboType = gl.UNSIGNED_SHORT;
+  return p;
+}
+
+/** A glowing tracer bolt mesh (elongated octahedron-ish spindle). */
+function makeBoltPrim(gl) {
+  const L = 1.0, R = 0.09;
+  const v = [
+    0, 0, 0.5 * L, 0, 0, -0.5 * L,                       // tips
+    R, 0, 0, -R, 0, 0, 0, R, 0, 0, -R, 0                 // ring
+  ];
+  const idx = [2, 0, 4, 4, 0, 3, 3, 0, 5, 5, 0, 2, 2, 1, 3, 3, 1, 5, 5, 1, 4, 4, 1, 2];
+  const pos = [], nor = [];
+  // flat normals per triangle
+  for (let i = 0; i < idx.length; i += 3) {
+    const a = [v[idx[i] * 3], v[idx[i] * 3 + 1], v[idx[i] * 3 + 2]];
+    const b = [v[idx[i + 1] * 3], v[idx[i + 1] * 3 + 1], v[idx[i + 1] * 3 + 2]];
+    const c = [v[idx[i + 2] * 3], v[idx[i + 2] * 3 + 1], v[idx[i + 2] * 3 + 2]];
+    const e1 = vec3.sub(V3(), b, a), e2 = vec3.sub(V3(), c, a), nn = vec3.norm(V3(), vec3.cross(V3(), e1, e2));
+    for (const q of [a, b, c]) { pos.push(q[0], q[1], q[2]); nor.push(nn[0], nn[1], nn[2]); }
+  }
+  const n = pos.length / 3;
+  const uv = new Float32Array(n * 2);
+  const prim = {
+    mesh: -1, prim: -1, count: n, indexed: false, skinned: false, vbo: {}, gpu: {},
+    mat: { base: [1, 1, 1], metallic: 0, roughness: 0.4, emissive: [1, 1, 1], baseTex: -1, name: 'bolt' },
+    bboxMin: [-R, -R, -L / 2], bboxMax: [R, R, L / 2], name: 'bolt'
+  };
+  const mkBuf = (arr) => {
+    const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW); return b;
+  };
+  prim.vboPos = mkBuf(new Float32Array(pos));
+  prim.gpu.NORMAL = mkBuf(new Float32Array(nor));
+  prim.gpu.TEXCOORD_0 = mkBuf(uv);
+  return prim;
+}
+
+/* ==========================================================================
+ * === AUDIO ================================================================
+ * Fully synthesised Web Audio: no samples fetched anywhere.
+ * ==========================================================================*/
+class AudioEngine {
+  constructor() {
+    this.ctx = null; this.master = null; this.musicGain = null; this.sfxGain = null;
+    this.noiseBuf = null; this.enabled = false; this._musicTimer = 0;
+  }
+  /** Must be called from a user gesture (browser autoplay policy). */
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AC({ latencyHint: 'interactive' });
+      const comp = this.ctx.createDynamicsCompressor();
+      comp.threshold.value = -18; comp.ratio.value = 6; comp.attack.value = 0.003; comp.release.value = 0.25;
+      this.master = this.ctx.createGain(); this.master.gain.value = CONFIG.audio.master;
+      this.sfxGain = this.ctx.createGain(); this.sfxGain.gain.value = CONFIG.audio.sfx;
+      this.musicGain = this.ctx.createGain(); this.musicGain.gain.value = CONFIG.audio.music;
+      this.sfxGain.connect(comp); this.musicGain.connect(comp);
+      comp.connect(this.master); this.master.connect(this.ctx.destination);
+      // 2 second noise buffer reused by all percussive sounds
+      const len = this.ctx.sampleRate * 2;
+      this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+      const d = this.noiseBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      this.enabled = true;
+    } catch (e) { logLine('audio unavailable: ' + e.message, true); }
+  }
+  get t() { return this.ctx ? this.ctx.currentTime : 0; }
+  noise(dur, freq, q, gain, type = 'bandpass', pan = 0) {
+    if (!this.enabled) return;
+    const ctx = this.ctx, t0 = ctx.currentTime;
+    const src = ctx.createBufferSource(); src.buffer = this.noiseBuf; src.loop = true;
+    const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(gain, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    src.connect(f); f.connect(g);
+    if (p) { p.pan.value = clamp(pan, -1, 1); g.connect(p); p.connect(this.sfxGain); }
+    else g.connect(this.sfxGain);
+    src.start(t0); src.stop(t0 + dur + 0.05);
+  }
+  tone(freq, dur, gain, type = 'sine', slideTo = 0, delay = 0, detune = 0) {
+    if (!this.enabled) return;
+    const ctx = this.ctx, t0 = ctx.currentTime + delay;
+    const o = ctx.createOscillator(); o.type = type; o.frequency.setValueAtTime(freq, t0);
+    if (detune) o.detune.value = detune;
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), t0 + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(this.sfxGain);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  }
+  cannon() {
+    this.tone(190, 0.28, 0.55, 'square', 42);
+    this.tone(88, 0.4, 0.5, 'sine', 30);
+    this.noise(0.22, 1700, 0.9, 0.35, 'highpass');
+  }
+  impact(vol = 0.5) {
+    this.noise(0.16, 620, 1.4, vol * 0.5);
+    this.tone(150, 0.12, vol * 0.35, 'triangle', 60);
+  }
+  explode() {
+    this.noise(0.75, 320, 0.7, 0.7, 'lowpass');
+    this.tone(70, 0.6, 0.6, 'sine', 24);
+    this.noise(0.35, 2600, 1.2, 0.25, 'bandpass');
+  }
+  lockBeep() { this.tone(1180, 0.07, 0.2, 'sine'); this.tone(1560, 0.06, 0.14, 'sine', 0, 0.07); }
+  dryClick() { this.tone(2200, 0.03, 0.12, 'square', 1400); }
+  reload() {
+    this.noise(0.06, 2400, 3, 0.2); this.noise(0.06, 1800, 3, 0.2);
+    this.tone(420, 0.1, 0.18, 'square', 700, 0.42);
+  }
+  footfall(vol = 0.3) { this.noise(0.12, 240, 1.1, vol * 0.4, 'lowpass'); this.tone(60, 0.1, vol * 0.3, 'sine', 40); }
+  jumpJet() { this.noise(0.35, 900, 0.6, 0.25, 'bandpass'); this.tone(320, 0.3, 0.2, 'sawtooth', 90); }
+  hurt() { this.noise(0.2, 300, 0.8, 0.4, 'lowpass'); this.tone(120, 0.25, 0.3, 'square', 55); }
+  uiTick() { this.tone(880, 0.05, 0.1, 'sine'); this.tone(1320, 0.05, 0.07, 'sine', 0, 0.05); }
+  waveStart() {
+    this.tone(330, 0.5, 0.2, 'sawtooth', 330, 0);
+    this.tone(494, 0.5, 0.16, 'sawtooth', 494, 0.12);
+    this.tone(660, 0.7, 0.14, 'sawtooth', 660, 0.24);
+  }
+  /** Simple procedural tension bed: low pulse + filtered noise pad. */
+  music(intensity) {
+    if (!this.enabled) return;
+    const now = this.t();
+    if (now - this._musicTimer < 0.5) return;
+    this._musicTimer = now;
+    const ctx = this.ctx, t0 = now;
+    const notes = [55, 55, 73.4, 65.4];
+    const f = notes[(Math.random() * notes.length) | 0];
+    const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.value = 180 + intensity * 700; lp.Q.value = 4;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.10 + intensity * 0.06, t0 + 0.06);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.46);
+    o.connect(lp); lp.connect(g); g.connect(this.musicGain);
+    o.start(t0); o.stop(t0 + 0.5);
+  }
+}
+const audio = new AudioEngine();
+
+/* ==========================================================================
+ * === COLLISION / WORLD HELPERS =============================================
+ * ==========================================================================*/
+/** Cylinder-vs-AABB push-out used for mech-vs-building collision. */
+function resolveCircleAABB(pos, radius, min, max) {
+  const cx = clamp(pos[0], min[0], max[0]), cz = clamp(pos[2], min[2], max[2]);
+  const dx = pos[0] - cx, dz = pos[2] - cz;
+  const d2 = dx * dx + dz * dz;
+  if (d2 > radius * radius) return false;
+  // inside footprint vertically?
+  if (pos[1] + 3.2 < min[1] || pos[1] > max[1]) return false;
+  if (d2 > 1e-8) {
+    const d = Math.sqrt(d2), push = (radius - d);
+    pos[0] += dx / d * push; pos[2] += dz / d * push;
+  } else {
+    // centre inside: eject along smallest penetration axis
+    const pxl = pos[0] - min[0], pxr = max[0] - pos[0], pzl = pos[2] - min[2], pzr = max[2] - pos[2];
+    const m = Math.min(pxl, pxr, pzl, pzr);
+    if (m === pxl) pos[0] = min[0] - radius; else if (m === pxr) pos[0] = max[0] + radius;
+    else if (m === pzl) pos[2] = min[2] - radius; else pos[2] = max[2] + radius;
+  }
+  return true;
+}
+
+/** Ray vs AABB (slab method). Returns hit distance or Infinity. */
+function rayAABB(ro, rd, min, max) {
+  let tmin = -Infinity, tmax = Infinity;
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(rd[i]) < 1e-8) {
+      if (ro[i] < min[i] || ro[i] > max[i]) return Infinity;
+      continue;
+    }
+    const inv = 1 / rd[i];
+    let t1 = (min[i] - ro[i]) * inv, t2 = (max[i] - ro[i]) * inv;
+    if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+    if (tmin > tmax) return Infinity;
+  }
+  return tmin >= 0 ? tmin : (tmax >= 0 ? 0 : Infinity);
+}
+
+/** Segment vs sphere (for hitscan bullets against enemy capsules). */
+function raySphere(ro, rd, c, r) {
+  const ox = ro[0] - c[0], oy = ro[1] - c[1], oz = ro[2] - c[2];
+  const b = ox * rd[0] + oy * rd[1] + oz * rd[2];
+  const cc = ox * ox + oy * oy + oz * oz - r * r;
+  const disc = b * b - cc;
+  if (disc < 0) return Infinity;
+  const s = Math.sqrt(disc);
+  const t = -b - s;
+  return t >= 0 ? t : (-b + s >= 0 ? 0 : Infinity);
+}
+//__CHUNK6__
