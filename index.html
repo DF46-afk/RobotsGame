@@ -306,7 +306,7 @@ const CONFIG = {
     engageRange: 46, strafePeriod: 4.2, hitFlash: 0.14, score: 100
   },
   player: { hp: 100, radius: 0.95, eyeHeight: 3.05, thirdPerson: 7.2 },
-  audio: { master: 0.8, comp: 0.72 },
+  audio: { master: 0.8, sfx: 0.9, music: 0.45 },
   perf: { maxDrawCalls: 200, dtCap: 0.1 }
 };
 
@@ -657,27 +657,43 @@ function glbReadAccessor(gltf, bin, accIndex, forceFloat = true) {
   const out = new Float32Array(count * comps);
   const bv = (A.bufferView !== undefined) ? gltf.bufferViews[A.bufferView] : null;
   if (bv) {
-    const stride = bv.byteStride || (comps * elemSize);
+    // byteStride is OPTIONAL: when absent the data is tightly packed.
+    const tight = comps * elemSize;
+    const stride = bv.byteStride || tight;
     const base = (bv.byteOffset || 0) + (A.byteOffset || 0);
-    if (base < 0 || base + (count - 1) * stride + comps * elemSize > bin.byteLength)
+    if (base < 0 || base % elemSize !== 0)
+      throw new Error('accessor ' + accIndex + ': misaligned base ' + base + ' for elemSize ' + elemSize);
+    if (base + (count - 1) * stride + tight > bin.byteLength)
       throw new Error('accessor ' + accIndex + ' exceeds BIN chunk');
-    // Build one typed view over the whole region then de-interleave elementwise.
-    const raw = new Ctor(bin, base, stride === comps * elemSize ? count * comps : Math.floor((bin.byteLength - base) / stride) * (stride / elemSize));
-    const src = new Ctor(bin, base, count * comps + (stride - comps * elemSize) * (count - 1));
-    const elemsPerRow = stride / elemSize;
-    const normDiv = (A.normalized === true || (!forceFloat && false)) ? (A.componentType === 5121 ? 255 : A.componentType === 5123 ? 65535 : 1) : 1;
-    for (let i = 0; i < count; i++) {
-      const rb = i * elemsPerRow;
-      for (let c = 0; c < comps; c++) out[i * comps + c] = src[rb + c] / normDiv;
+    // Per spec, a typed-array view over an interleaved row must never read
+    // past the last component of the final element — clamp the view length.
+    const tailPad = (stride > tight) ? (stride - tight) / elemSize : 0;   // elems after last comp in final row
+    const viewLen = Math.max(0, Math.min(count * comps + tailPad,
+      Math.floor((bin.byteLength - base) / elemSize)) - tailPad);
+    const src = new Ctor(bin, base, viewLen);
+    const elemsPerRow = stride / elemSize;   // components per interleaved row
+    // NORMALIZED integer attributes (u8/u16 weights on some exporters) must be
+    // rescaled on the CPU: u8 -> /255, u16 -> /65535, i8 -> /127, i16 -> /32767.
+    let normDiv = 1;
+    if (A.normalized === true) {
+      normDiv = A.componentType === 5121 ? 255 : A.componentType === 5123 ? 65535
+              : A.componentType === 5120 ? 127 : A.componentType === 5122 ? 32767 : 1;
     }
-    void raw;
-  } else {
-    // Sparse/inline accessors without bufferView: values live in accessor.sparse or are zero.
-    if (A.sparse) {
-      const sp = A.sparse;
-      const ic = glbReadAccessor(gltf, bin, sp.values.bufferView !== undefined ? sp.values.byteOffset && sp.count : sp.count, true);
-      void ic; // sparse fallback: leave zeros (extremely rare in these assets)
+    if (elemsPerRow === comps) {
+      // fast path: tightly packed — bulk copy, scale only when needed
+      if (normDiv === 1) out.set(src.subarray(0, count * comps));
+      else for (let i = 0; i < src.length; i++) out[i] = src[i] / normDiv;
+    } else {
+      for (let i = 0; i < count; i++) {
+        const rb = i * elemsPerRow;
+        for (let c = 0; c < comps; c++) out[i * comps + c] = src[rb + c] / normDiv;
+      }
     }
+  } else if (A.type && A.count) {
+    // Accessor with no bufferView (rare): values may be all-zero or sparse.
+    // We intentionally leave `out` zero-filled and log once — a wrong guess
+    // here corrupts geometry silently, so visibility matters.
+    logLine('accessor ' + accIndex + ' has no bufferView (sparse?) — zero-filled', true);
   }
   if (!forceFloat) {
     const ints = new Int32Array(count * comps);
@@ -1021,6 +1037,7 @@ out vec4 fragColor;
 uniform vec3 uCamPos, uBaseColor, uEmissive, uLightDir, uLightColor, uSkyColor, uGroundColor, uFogColor;
 uniform float uMetallic, uRoughness, uAlpha, uEmissiveBoost, uFogDensity, uTime, uHitFlash;
 uniform int uUseBaseTex, uUnlit, uReceiveShadow;
+uniform sampler2D uBaseTexS;      // baseColor map (unit 0) — declared here so it is never optimized out
 uniform highp sampler2DShadow uShadowMap;   // hardware PCF depth texture
 uniform mat4 uLightVP;
 uniform sampler2D uPointColors;   // RGBA32F texture: xyz=color, w=intensity, up to 8 lights
@@ -2016,7 +2033,13 @@ class ProceduralMech {
                + Math.cos(this.phase * 0.5) * sw.ampRoll * 0.5 * Math.min(1, this.speedNorm);
     const pitch = Math.sin(this.swayT * sw.freq * 0.73 + 1.1) * sw.ampPitch * swayAmt;
     /* ---- write joint overrides ----------------------------------------- */
-    this.applyPose({ bob, kick, roll, pitch, recP, recY, speed: this.speedNorm, dt, hm });
+    // aim deltas are RELATIVE to the body facing: only the residual between
+    // where the camera looks and where the chassis points drives arms/head.
+    let aimYawOff = this.aimYaw - this.facing;
+    while (aimYawOff > Math.PI) aimYawOff -= Math.PI * 2;
+    while (aimYawOff < -Math.PI) aimYawOff += Math.PI * 2;
+    this.applyPose({ bob, kick, roll, pitch, recP, recY, speed: this.speedNorm, dt, hm,
+                     aimPitch: this.aimPitch, aimYawOffset: clamp(aimYawOff, -1.4, 1.4) });
     if (this.hitFlash > 0) this.hitFlash = Math.max(0, this.hitFlash - dt * 6);
   }
   /** Landing squash: extra spring energy proportional to impact speed. */
